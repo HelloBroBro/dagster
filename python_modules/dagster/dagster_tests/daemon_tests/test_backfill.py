@@ -45,6 +45,9 @@ from dagster._core.definitions.selector import (
     PartitionsByAssetSelector,
     PartitionsSelector,
 )
+from dagster._core.errors import (
+    DagsterUserCodeUnreachableError,
+)
 from dagster._core.execution.asset_backfill import RUN_CHUNK_SIZE
 from dagster._core.execution.backfill import BulkActionStatus, PartitionBackfill
 from dagster._core.host_representation import (
@@ -281,6 +284,14 @@ def asset_d(asset_a):
     pass
 
 
+@asset(
+    partitions_def=StaticPartitionsDefinition(["e_1", "e_2", "e_3"]),
+    ins={"asset_a": AssetIn(partition_mapping=AllPartitionMapping())},
+)
+def asset_e(asset_a):
+    pass
+
+
 daily_partitions_def = DailyPartitionsDefinition("2023-01-01")
 
 
@@ -337,6 +348,7 @@ def the_repo():
         asset_d,
         daily_1,
         daily_2,
+        asset_e,
         asset_with_single_run_backfill_policy,
         asset_with_multi_run_backfill_policy,
     ]
@@ -1148,6 +1160,182 @@ def test_asset_backfill_mid_iteration_cancel(
 
     assert instance.get_runs_count() == RUN_CHUNK_SIZE
     assert instance.get_runs_count(RunsFilter(statuses=IN_PROGRESS_RUN_STATUSES)) == 0
+
+
+def test_asset_backfill_forcible_mark_as_canceled_during_canceling_iteration(
+    instance: DagsterInstance, workspace_context: WorkspaceProcessContext
+):
+    asset_selection = [AssetKey("daily_1"), AssetKey("daily_2")]
+    asset_graph = ExternalAssetGraph.from_workspace(workspace_context.create_request_context())
+
+    backfill_id = "backfill_id"
+    backfill = PartitionBackfill.from_asset_partitions(
+        asset_graph=asset_graph,
+        backfill_id=backfill_id,
+        tags={},
+        backfill_timestamp=pendulum.now().timestamp(),
+        asset_selection=asset_selection,
+        partition_names=["2023-01-01"],
+        dynamic_partitions_store=instance,
+        all_partitions=False,
+    ).with_status(BulkActionStatus.CANCELING)
+    instance.add_backfill(
+        # Add some partitions in a "requested" state to mock that certain partitions are hanging
+        backfill.with_asset_backfill_data(
+            backfill.asset_backfill_data._replace(
+                requested_subset=AssetGraphSubset(non_partitioned_asset_keys={AssetKey("daily_1")})
+            ),
+            dynamic_partitions_store=instance,
+            asset_graph=asset_graph,
+        )
+    )
+    backfill = instance.get_backfill(backfill_id)
+    assert backfill
+    assert backfill.status == BulkActionStatus.CANCELING
+
+    override_get_backfill_num_calls = 0
+
+    def _override_get_backfill(_):
+        nonlocal override_get_backfill_num_calls
+        if override_get_backfill_num_calls == 1:
+            # Mark backfill as canceled during the middle of the cancellation iteration
+            override_get_backfill_num_calls += 1
+            return backfill.with_status(BulkActionStatus.CANCELED)
+        else:
+            override_get_backfill_num_calls += 1
+            return backfill
+
+    # After submitting the first chunk, update the backfill to be CANCELING
+    with mock.patch(
+        "dagster._core.instance.DagsterInstance.get_backfill",
+        side_effect=_override_get_backfill,
+    ):
+        # Mock that a run is still in progress. If we don't add this, then the backfill will be
+        # marked as failed
+        with mock.patch("dagster._core.instance.DagsterInstance.get_run_ids", side_effect=["fake"]):
+            assert all(
+                not error
+                for error in list(
+                    execute_backfill_iteration(
+                        workspace_context, get_default_daemon_logger("BackfillDaemon")
+                    )
+                )
+            )
+
+    updated_backfill = instance.get_backfill(backfill_id)
+    assert updated_backfill
+    # Assert that the backfill was indeed marked as canceled
+    assert updated_backfill.status == BulkActionStatus.CANCELED
+
+
+def test_asset_backfill_mid_iteration_code_location_unreachable_error(
+    instance: DagsterInstance, workspace_context: WorkspaceProcessContext
+):
+    from dagster._core.execution.submit_asset_runs import _get_job_execution_data_from_run_request
+
+    asset_selection = [AssetKey("asset_a"), AssetKey("asset_e")]
+    asset_graph = ExternalAssetGraph.from_workspace(workspace_context.create_request_context())
+
+    num_partitions = 1
+    target_partitions = partitions_a.get_partition_keys()[0:num_partitions]
+    backfill_id = "simple_fan_out_backfill"
+    backfill = PartitionBackfill.from_asset_partitions(
+        asset_graph=asset_graph,
+        backfill_id=backfill_id,
+        tags={},
+        backfill_timestamp=pendulum.now().timestamp(),
+        asset_selection=asset_selection,
+        partition_names=target_partitions,
+        dynamic_partitions_store=instance,
+        all_partitions=False,
+    )
+    instance.add_backfill(backfill)
+    assert instance.get_runs_count() == 0
+    backfill = instance.get_backfill(backfill_id)
+    assert backfill
+    assert backfill.status == BulkActionStatus.REQUESTED
+
+    assert all(
+        not error
+        for error in list(
+            execute_backfill_iteration(
+                workspace_context, get_default_daemon_logger("BackfillDaemon")
+            )
+        )
+    )
+    updated_backfill = instance.get_backfill(backfill_id)
+    assert updated_backfill
+    assert updated_backfill.asset_backfill_data
+    assert (
+        updated_backfill.asset_backfill_data.requested_subset.num_partitions_and_non_partitioned_assets
+        == 1
+    )
+
+    # The following backfill iteration will attempt to submit run requests for asset_e's three partitions.
+    # The first call to _get_job_execution_data_from_run_request will succeed, but the second call will
+    # raise a DagsterUserCodeUnreachableError. Subsequently only the first partition will be successfully
+    # submitted.
+    counter = 0
+
+    def raise_code_unreachable_error_on_second_call(*args, **kwargs):
+        nonlocal counter
+        if counter == 0:
+            counter += 1
+            return _get_job_execution_data_from_run_request(*args, **kwargs)
+        elif counter == 1:
+            counter += 1
+            raise DagsterUserCodeUnreachableError()
+        else:
+            # Should not attempt to create a run for the third partition if the second
+            # errored with DagsterUserCodeUnreachableError
+            raise Exception("Should not reach")
+
+    with mock.patch(
+        "dagster._core.execution.submit_asset_runs._get_job_execution_data_from_run_request",
+        side_effect=raise_code_unreachable_error_on_second_call,
+    ):
+        assert all(
+            not error
+            for error in list(
+                execute_backfill_iteration(
+                    workspace_context, get_default_daemon_logger("BackfillDaemon")
+                )
+            )
+        )
+
+    assert instance.get_runs_count() == 2
+    updated_backfill = instance.get_backfill(backfill_id)
+    assert updated_backfill
+    assert updated_backfill.asset_backfill_data
+    assert (
+        updated_backfill.asset_backfill_data.materialized_subset.num_partitions_and_non_partitioned_assets
+        == 1
+    )
+    assert (
+        updated_backfill.asset_backfill_data.requested_subset.num_partitions_and_non_partitioned_assets
+        == 2
+    )
+
+    # Execute backfill iteration again, confirming that the two partitions that did not submit runs
+    # on the previous iteration are requested on this iteration.
+    assert all(
+        not error
+        for error in list(
+            execute_backfill_iteration(
+                workspace_context, get_default_daemon_logger("BackfillDaemon")
+            )
+        )
+    )
+    # Assert that two new runs are submitted
+    assert instance.get_runs_count() == 4
+
+    updated_backfill = instance.get_backfill(backfill_id)
+    assert updated_backfill
+    assert updated_backfill.asset_backfill_data
+    assert (
+        updated_backfill.asset_backfill_data.requested_subset.num_partitions_and_non_partitioned_assets
+        == 4
+    )
 
 
 def test_fail_backfill_when_runs_completed_but_partitions_marked_as_in_progress(
