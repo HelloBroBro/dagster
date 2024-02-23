@@ -11,6 +11,7 @@ from typing_extensions import TypeAlias
 import dagster._check as check
 from dagster._annotations import deprecated, experimental_param, public
 from dagster._core.definitions.asset_checks import AssetChecksDefinition
+from dagster._core.definitions.internal_asset_graph import InternalAssetGraph
 from dagster._core.errors import DagsterInvalidSubsetError
 from dagster._core.selector.subset_selector import (
     fetch_connected,
@@ -21,7 +22,7 @@ from dagster._core.selector.subset_selector import (
 from dagster._serdes.serdes import whitelist_for_serdes
 
 from .asset_check_spec import AssetCheckKey
-from .asset_graph import AssetGraph, InternalAssetGraph
+from .asset_graph import AssetGraph
 from .assets import AssetsDefinition
 from .events import (
     AssetKey,
@@ -331,7 +332,7 @@ class AssetSelection(ABC, BaseModel, frozen=True):
             asset_graph = all_assets
         else:
             check.iterable_param(all_assets, "all_assets", (AssetsDefinition, SourceAsset))
-            asset_graph = AssetGraph.from_assets(all_assets)
+            asset_graph = InternalAssetGraph.from_assets(all_assets)
 
         return self.resolve_inner(asset_graph)
 
