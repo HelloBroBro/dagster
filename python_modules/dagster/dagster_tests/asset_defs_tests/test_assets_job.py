@@ -283,7 +283,7 @@ def test_source_asset():
             assert context.resources.subresource == 9
             assert context.upstream_output.resources.subresource == 9
             assert context.upstream_output.asset_key == AssetKey("source1")
-            assert context.upstream_output.metadata == {"a": "b"}
+            assert context.upstream_output.metadata["a"] == "b"
             assert context.upstream_output.resource_config["a"] == 7
             assert context.upstream_output.log is not None
             context.upstream_output.log.info("hullo")
@@ -2887,3 +2887,21 @@ def test_subset_cycle_dependencies():
     result = job.execute_in_process()
     assert result.success
     assert _all_asset_keys(result) == {AssetKey("a"), AssetKey("b")}
+
+
+def test_exclude_assets_without_keys():
+    @asset
+    def foo():
+        pass
+
+    # This is a valid AssetsDefinition but has no keys. It should not be executed.
+    @multi_asset()
+    def ghost():
+        assert False
+
+    foo_job = Definitions(
+        assets=[foo, ghost],
+        jobs=[define_asset_job("foo_job", [foo])],
+    ).get_job_def("foo_job")
+
+    assert foo_job.execute_in_process().success
