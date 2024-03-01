@@ -4,12 +4,13 @@ import {Box, Colors, FontFamily, Icon, Spinner} from '@dagster-io/ui-components'
 import Fuse from 'fuse.js';
 import debounce from 'lodash/debounce';
 import * as React from 'react';
-import {useHistory, useLocation} from 'react-router-dom';
+import {useHistory} from 'react-router-dom';
 import styled from 'styled-components';
 
 import {SearchResults} from './SearchResults';
 import {SearchResult} from './types';
 import {useGlobalSearch} from './useGlobalSearch';
+import {__updateSearchVisibility} from './useSearchVisibility';
 import {ShortcutHandler} from '../app/ShortcutHandler';
 import {useTrackEvent} from '../app/analytics';
 import {Trace, createTrace} from '../performance';
@@ -72,7 +73,6 @@ const initialState: State = {
 const DEBOUNCE_MSEC = 100;
 
 export const SearchDialog = ({searchPlaceholder}: {searchPlaceholder: string}) => {
-  const location = useLocation();
   const history = useHistory();
   const {initialize, loading, searchPrimary, searchSecondary} = useGlobalSearch();
   const trackEvent = useTrackEvent();
@@ -100,6 +100,7 @@ export const SearchDialog = ({searchPlaceholder}: {searchPlaceholder: string}) =
   }, [loading, primaryResults, secondaryResults]);
 
   React.useEffect(() => {
+    __updateSearchVisibility(shown);
     if (!shown && firstSearchTrace.current) {
       // When the dialog closes:
       // Either the trace finished and we logged it, or it didn't and so we throw it away
@@ -145,10 +146,6 @@ export const SearchDialog = ({searchPlaceholder}: {searchPlaceholder: string}) =
     dispatch({type: 'change-query', queryString: newValue});
     debouncedSearch(newValue);
   };
-
-  React.useEffect(() => {
-    dispatch({type: 'hide-dialog'});
-  }, [location.pathname]);
 
   const onClickResult = React.useCallback(
     (result: Fuse.FuseResult<SearchResult>) => {

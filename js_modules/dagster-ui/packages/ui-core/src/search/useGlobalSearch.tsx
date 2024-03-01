@@ -1,7 +1,7 @@
 import {gql, useLazyQuery} from '@apollo/client';
 import {useCallback, useRef} from 'react';
 
-import {WorkerSearchResult, createSearchWorker} from './createSearchWorker';
+import {QueryResponse, WorkerSearchResult, createSearchWorker} from './createSearchWorker';
 import {SearchResult, SearchResultType} from './types';
 import {SearchPrimaryQuery, SearchSecondaryQuery} from './types/useGlobalSearch.types';
 import {PYTHON_ERROR_FRAGMENT} from '../app/PythonErrorFragment';
@@ -162,6 +162,12 @@ const fuseOptions = {
 
 const EMPTY_RESPONSE = {queryString: '', results: []};
 
+type IndexBuffer = {
+  query: string;
+  resolve: (value: QueryResponse) => void;
+  cancel: () => void;
+};
+
 /**
  * Perform global search populated by two lazy queries, to be initialized upon some
  * interaction with the search input. Each query result list is packaged and sent to a worker
@@ -181,49 +187,107 @@ export const useGlobalSearch = () => {
   const secondarySearch = useRef<WorkerSearchResult | null>(null);
 
   const primary = useLazyQuery<SearchPrimaryQuery>(SEARCH_PRIMARY_QUERY, {
-    // Try to make aggressive use of workspace values from the Apollo cache.
-    fetchPolicy: 'cache-first',
+    // Don't use the cache because it is slow and we only make this request once so we don't need the cache
+    fetchPolicy: 'no-cache',
     onCompleted: (data: SearchPrimaryQuery) => {
       const results = primaryDataToSearchResults({data});
       if (!primarySearch.current) {
         primarySearch.current = createSearchWorker('primary', fuseOptions);
       }
       primarySearch.current.update(results);
+      consumeBufferEffect(primarySearchBuffer, primarySearch.current);
     },
   });
 
   const secondary = useLazyQuery<SearchSecondaryQuery>(SEARCH_SECONDARY_QUERY, {
-    // As above, try to aggressively use asset information from Apollo cache if possible.
-    fetchPolicy: 'cache-first',
+    // Don't use the cache because it is slow and we only make this request once so we don't need the cache
+    fetchPolicy: 'no-cache',
     onCompleted: (data: SearchSecondaryQuery) => {
       const results = secondaryDataToSearchResults({data});
       if (!secondarySearch.current) {
         secondarySearch.current = createSearchWorker('secondary', fuseOptions);
       }
       secondarySearch.current.update(results);
+      consumeBufferEffect(secondarySearchBuffer, secondarySearch.current);
     },
   });
+
+  const primarySearchBuffer = useRef<IndexBuffer | null>(null);
+  const secondarySearchBuffer = useRef<IndexBuffer | null>(null);
 
   const [performPrimaryLazyQuery, primaryResult] = primary;
   const [performSecondaryLazyQuery, secondaryResult] = secondary;
 
-  // If we already have WebWorkers set up, initialization is complete and this will be a no-op.
-  const initialize = useCallback(async () => {
-    if (!primarySearch.current) {
+  const consumeBufferEffect = useCallback(
+    async (buffer: React.MutableRefObject<IndexBuffer | null>, search: WorkerSearchResult) => {
+      const bufferValue = buffer.current;
+      if (bufferValue) {
+        buffer.current = null;
+        const result = await search.search(bufferValue.query);
+        bufferValue.resolve(result);
+      }
+    },
+    [],
+  );
+
+  const initialize = useCallback(() => {
+    if (!primaryResult.data && !primaryResult.loading) {
       performPrimaryLazyQuery();
     }
-    if (!secondarySearch.current) {
+    if (!secondaryResult.data && !secondaryResult.loading) {
       performSecondaryLazyQuery();
     }
-  }, [performPrimaryLazyQuery, performSecondaryLazyQuery]);
+  }, [performPrimaryLazyQuery, performSecondaryLazyQuery, primaryResult, secondaryResult]);
 
-  const searchPrimary = useCallback(async (queryString: string) => {
-    return primarySearch.current ? primarySearch.current.search(queryString) : EMPTY_RESPONSE;
-  }, []);
+  const searchIndex = useCallback(
+    (
+      index: React.MutableRefObject<WorkerSearchResult | null>,
+      indexBuffer: React.MutableRefObject<IndexBuffer | null>,
+      query: string,
+    ): Promise<QueryResponse> => {
+      return new Promise(async (res) => {
+        if (index.current) {
+          const result = await index.current.search(query);
+          res(result);
+        } else {
+          // The user made a query before data is available
+          // let's store the query in a buffer and once the data is available
+          // we will consume the buffer
+          if (indexBuffer.current) {
+            // If the user changes the query before the data is available
+            // lets "cancel" the last buffer (resolve its awaitable with
+            // an empty response so it doesn't wait for all eternity) and
+            // only store the most recent query
+            indexBuffer.current.cancel();
+          }
+          indexBuffer.current = {
+            query,
+            resolve(response: QueryResponse) {
+              res(response);
+            },
+            cancel() {
+              res(EMPTY_RESPONSE);
+            },
+          };
+        }
+      });
+    },
+    [],
+  );
 
-  const searchSecondary = useCallback(async (queryString: string) => {
-    return secondarySearch.current ? secondarySearch.current.search(queryString) : EMPTY_RESPONSE;
-  }, []);
+  const searchPrimary = useCallback(
+    async (queryString: string) => {
+      return searchIndex(primarySearch, primarySearchBuffer, queryString);
+    },
+    [searchIndex],
+  );
+
+  const searchSecondary = useCallback(
+    async (queryString: string) => {
+      return searchIndex(secondarySearch, secondarySearchBuffer, queryString);
+    },
+    [searchIndex],
+  );
 
   // Terminate the workers. Be careful with this: for users with very large workspaces, we should
   // avoid constantly re-querying and restarting the threads. It should only be used when we know
@@ -237,7 +301,7 @@ export const useGlobalSearch = () => {
 
   return {
     initialize,
-    loading: primaryResult.loading || secondaryResult.loading,
+    loading: !primaryResult.data || !secondaryResult.data,
     searchPrimary,
     searchSecondary,
     terminate,
