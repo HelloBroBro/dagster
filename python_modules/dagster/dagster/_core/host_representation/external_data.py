@@ -73,11 +73,12 @@ from dagster._core.definitions.dependency import (
 )
 from dagster._core.definitions.events import AssetKey
 from dagster._core.definitions.freshness_policy import FreshnessPolicy
+from dagster._core.definitions.graph_definition import GraphDefinition
 from dagster._core.definitions.metadata import (
     MetadataFieldSerializer,
     MetadataMapping,
-    MetadataUserInput,
     MetadataValue,
+    RawMetadataMapping,
     TextMetadataValue,
     normalize_metadata,
 )
@@ -1535,7 +1536,14 @@ def external_asset_checks_from_defs(
                 of_type=AssetsDefinition,
                 additional_message=f"Check {check_key} is redefined in an AssetsDefinition and an AssetChecksDefinition",
             )
-            atomic_execution_unit_id = first_node.unique_id if not first_node.can_subset else None
+
+            # Executing individual checks isn't supported in graph assets
+            if isinstance(first_node.node_def, GraphDefinition):
+                atomic_execution_unit_id = first_node.unique_id
+            else:
+                atomic_execution_unit_id = (
+                    first_node.unique_id if not first_node.can_subset else None
+                )
         else:
             check.failed(f"Unexpected node type {first_node}")
 
@@ -1562,7 +1570,7 @@ def external_asset_nodes_from_defs(
     ] = defaultdict(list)
     asset_info_by_asset_key: Dict[AssetKey, AssetOutputInfo] = dict()
     freshness_policy_by_asset_key: Dict[AssetKey, FreshnessPolicy] = dict()
-    metadata_by_asset_key: Dict[AssetKey, MetadataUserInput] = dict()
+    metadata_by_asset_key: Dict[AssetKey, RawMetadataMapping] = dict()
     auto_materialize_policy_by_asset_key: Dict[AssetKey, AutoMaterializePolicy] = dict()
     backfill_policy_by_asset_key: Dict[AssetKey, Optional[BackfillPolicy]] = dict()
 

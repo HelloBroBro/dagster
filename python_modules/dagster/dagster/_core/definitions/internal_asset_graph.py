@@ -86,16 +86,6 @@ class InternalAssetGraph(AssetGraph):
     def has_asset_check(self, asset_check_key: AssetCheckKey) -> bool:
         return asset_check_key in self._asset_checks_defs_by_key
 
-    def includes_materializable_and_external_assets(
-        self, asset_keys: AbstractSet[AssetKey]
-    ) -> bool:
-        """Returns true if the given asset keys contains at least one materializable asset and
-        at least one external asset.
-        """
-        selected_external_assets = self.external_asset_keys & asset_keys
-        selected_materializable_assets = self.materializable_asset_keys & asset_keys
-        return len(selected_external_assets) > 0 and len(selected_materializable_assets) > 0
-
     @property
     @cached_method
     def asset_dep_graph(self) -> DependencyGraph[AssetKey]:
@@ -112,8 +102,7 @@ class InternalAssetGraph(AssetGraph):
         return {key for ad in self._assets_defs if ad.is_materializable for key in ad.keys}
 
     def is_materializable(self, asset_key: AssetKey) -> bool:
-        # Performing an existence check temporarily until we change callsites
-        return self.has_asset(asset_key) and self.get_assets_def(asset_key).is_materializable
+        return self.get_assets_def(asset_key).is_materializable
 
     @property
     @cached_method
@@ -137,8 +126,7 @@ class InternalAssetGraph(AssetGraph):
         return {key for ad in self._assets_defs if ad.is_executable for key in ad.keys}
 
     def is_executable(self, asset_key: AssetKey) -> bool:
-        # Performing an existence check temporarily until we change callsites
-        return self.has_asset(asset_key) and self.get_assets_def(asset_key).is_executable
+        return self.get_assets_def(asset_key).is_executable
 
     def asset_keys_for_group(self, group_name: str) -> AbstractSet[AssetKey]:
         return {
@@ -179,8 +167,7 @@ class InternalAssetGraph(AssetGraph):
         }
 
     def get_partitions_def(self, asset_key: AssetKey) -> Optional[PartitionsDefinition]:
-        # Performing an existence check temporarily until we change callsites
-        return self.get_assets_def(asset_key).partitions_def if self.has_asset(asset_key) else None
+        return self.get_assets_def(asset_key).partitions_def
 
     def get_partition_mappings(self, asset_key: AssetKey) -> Mapping[AssetKey, PartitionMapping]:
         return self.get_assets_def(asset_key).partition_mappings

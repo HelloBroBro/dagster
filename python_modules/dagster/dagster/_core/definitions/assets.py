@@ -71,6 +71,7 @@ from .source_asset import SourceAsset
 from .utils import DEFAULT_GROUP_NAME, validate_group_name
 
 if TYPE_CHECKING:
+    from .asset_graph import AssetKeyOrCheckKey
     from .graph_definition import GraphDefinition
 
 ASSET_SUBSET_INPUT_PREFIX = "__subset_input__"
@@ -483,7 +484,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 outputs, and values are the group name. Cannot be used with the group_name argument.
             descriptions_by_output_name (Optional[Mapping[str, Optional[str]]]): Defines a description to be
                 associated with each of the output asstes for this graph.
-            metadata_by_output_name (Optional[Mapping[str, Optional[MetadataUserInput]]]): Defines metadata to
+            metadata_by_output_name (Optional[Mapping[str, Optional[RawMetadataMapping]]]): Defines metadata to
                 be associated with each of the output assets for this node. Keys are names of the
                 outputs, and values are dictionaries of metadata to be associated with the related
                 asset.
@@ -574,7 +575,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 outputs, and values are the group name. Cannot be used with the group_name argument.
             descriptions_by_output_name (Optional[Mapping[str, Optional[str]]]): Defines a description to be
                 associated with each of the output asstes for this graph.
-            metadata_by_output_name (Optional[Mapping[str, Optional[MetadataUserInput]]]): Defines metadata to
+            metadata_by_output_name (Optional[Mapping[str, Optional[RawMetadataMapping]]]): Defines metadata to
                 be associated with each of the output assets for this node. Keys are names of the
                 outputs, and values are dictionaries of metadata to be associated with the related
                 asset.
@@ -900,6 +901,16 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         }
 
     @property
+    def asset_and_check_keys_by_output_name(self) -> Mapping[str, "AssetKeyOrCheckKey"]:
+        return merge_dicts(
+            self.keys_by_output_name,
+            {
+                output_name: spec.key
+                for output_name, spec in self.check_specs_by_output_name.items()
+            },
+        )
+
+    @property
     def keys_by_input_name(self) -> Mapping[str, AssetKey]:
         upstream_keys = {dep_key for key in self.keys for dep_key in self.asset_deps[key]}
         return {
@@ -1196,11 +1207,17 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 **replaced_group_names_by_key,
                 **group_names_by_key,
             },
-            metadata_by_key=replaced_metadata_by_key,
+            metadata_by_key={
+                **self._metadata_by_key,
+                **replaced_metadata_by_key,
+            },
             freshness_policies_by_key=replaced_freshness_policies_by_key,
             auto_materialize_policies_by_key=replaced_auto_materialize_policies_by_key,
             backfill_policy=backfill_policy if backfill_policy else self.backfill_policy,
-            descriptions_by_key=replaced_descriptions_by_key,
+            descriptions_by_key={
+                **self._descriptions_by_key,
+                **replaced_descriptions_by_key,
+            },
             is_subset=is_subset,
             check_specs_by_output_name=check_specs_by_output_name
             if check_specs_by_output_name
@@ -1210,11 +1227,13 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             else self._selected_asset_check_keys,
         )
 
-        return self.__class__(**merge_dicts(self.get_attributes_dict(), replaced_attributes))
+        merged_attrs = merge_dicts(self.get_attributes_dict(), replaced_attributes)
+        return self.__class__.dagster_internal_init(**merged_attrs)
 
     def _subset_graph_backed_asset(
         self,
         selected_asset_keys: AbstractSet[AssetKey],
+        selected_asset_check_keys: AbstractSet[AssetCheckKey],
     ):
         from dagster._core.definitions.graph_definition import GraphDefinition
 
@@ -1230,6 +1249,10 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         op_selection: List[str] = []
         for asset_key in selected_asset_keys:
             dep_node_handles = dep_node_handles_by_asset_key[asset_key]
+            for dep_node_handle in dep_node_handles:
+                op_selection.append(".".join(dep_node_handle.path[1:]))
+        for asset_check_key in selected_asset_check_keys:
+            dep_node_handles = dep_node_handles_by_asset_key[asset_check_key]
             for dep_node_handle in dep_node_handles:
                 op_selection.append(".".join(dep_node_handle.path[1:]))
 
@@ -1268,13 +1291,8 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         if asset_subselection == self.keys and asset_check_subselection == self.check_keys:
             return self
         elif isinstance(self.node_def, GraphDefinition):  # Node is graph-backed asset
-            check.invariant(
-                selected_asset_check_keys == self.check_keys,
-                "Subsetting graph-backed assets with checks is not yet supported",
-            )
-
             subsetted_node = self._subset_graph_backed_asset(
-                asset_subselection,
+                asset_subselection, asset_check_subselection
             )
 
             # The subsetted node should only include asset inputs that are dependencies of the
@@ -1313,6 +1331,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 node_def=subsetted_node,
                 asset_deps=subsetted_asset_deps,
                 selected_asset_keys=selected_asset_keys & self.keys,
+                selected_asset_check_keys=asset_check_subselection,
                 is_subset=True,
             )
 

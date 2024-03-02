@@ -176,7 +176,10 @@ class CachingDataTimeResolver:
         upstream_records: Dict[AssetKey, EventLogRecord] = {}
 
         for parent_key in self.asset_graph.get_parents(asset_key):
-            if not self.asset_graph.is_executable(parent_key):
+            if not (
+                self.asset_graph.has_asset(parent_key)
+                and self.asset_graph.is_executable(parent_key)
+            ):
                 continue
 
             input_event_pointer_tag = get_input_event_pointer_tag(parent_key)
@@ -536,7 +539,7 @@ class CachingDataTimeResolver:
                 "Cannot calculate minutes late for asset without a FreshnessPolicy"
             )
 
-        if self.asset_graph.is_external(asset_key):
+        if self.asset_graph.is_observable(asset_key):
             current_data_time = self._get_source_data_time(asset_key, current_time=evaluation_time)
         else:
             current_data_time = self.get_current_data_time(asset_key, current_time=evaluation_time)
