@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 from typing import Any, Dict, cast
 
 from dagster import (
@@ -74,3 +76,38 @@ def test_columns_metadata(test_metadata_manifest: Dict[str, Any]) -> None:
     )
 
     assert result.success
+
+
+def test_dbt_cli_no_jinja_log_info() -> None:
+    dbt = DbtCliResource(project_dir=os.fspath(test_metadata_path))
+    dbt_cli_parse_invocation = dbt.cli(["parse"])
+
+    assert dbt_cli_parse_invocation.is_successful()
+    assert not any(
+        event.raw_event["info"]["name"] == "JinjaLogInfo"
+        for event in dbt_cli_parse_invocation.stream_raw_events()
+    )
+
+
+def test_dbt_raw_cli_no_empty_jinja_log_info() -> None:
+    result = subprocess.check_output(
+        ["dbt", "--log-format", "json", "--no-partial-parse", "parse"],
+        text=True,
+        cwd=test_metadata_path,
+    )
+
+    assert not any(
+        json.loads(line)["info"]["name"] == "JinjaLogInfo" for line in result.splitlines()
+    )
+
+
+def test_dbt_raw_cli_no_jinja_log_info() -> None:
+    result = subprocess.check_output(
+        ["dbt", "--log-format", "json", "--no-partial-parse", "build"],
+        text=True,
+        cwd=test_metadata_path,
+    )
+
+    assert not any(
+        json.loads(line)["info"]["name"] == "JinjaLogInfo" for line in result.splitlines()
+    )

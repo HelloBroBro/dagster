@@ -2197,7 +2197,6 @@ class TestSchedulerRun:
         scheduler_instance: DagsterInstance,
         workspace_context: WorkspaceProcessContext,
         external_repo: ExternalRepository,
-        caplog: pytest.LogCaptureFixture,
         executor: ThreadPoolExecutor,
     ):
         freeze_datetime = feb_27_2019_one_second_to_midnight()
@@ -2233,10 +2232,8 @@ class TestSchedulerRun:
             )
 
             assert len(ticks) == 0
-
-            assert (
-                "Could not find repository invalid_repo_name in location test_location to run"
-                " schedule simple_schedule" in caplog.text
+            assert not scheduler_instance.get_instigator_state(
+                schedule_state.instigator_origin_id, schedule_state.selector_id
             )
 
     @pytest.mark.parametrize("executor", get_schedule_executors())
@@ -2245,7 +2242,6 @@ class TestSchedulerRun:
         scheduler_instance: DagsterInstance,
         workspace_context: WorkspaceProcessContext,
         external_repo: ExternalRepository,
-        caplog,
         executor: ThreadPoolExecutor,
     ):
         freeze_datetime = feb_27_2019_one_second_to_midnight()
@@ -2278,8 +2274,9 @@ class TestSchedulerRun:
             )
 
             assert len(ticks) == 0
-
-            assert "Could not find schedule invalid_schedule in repository the_repo." in caplog.text
+            assert not scheduler_instance.get_instigator_state(
+                schedule_state.instigator_origin_id, schedule_state.selector_id
+            )
 
     @pytest.mark.parametrize("executor", get_schedule_executors())
     def test_load_code_location_not_in_workspace(
@@ -2287,7 +2284,6 @@ class TestSchedulerRun:
         scheduler_instance: DagsterInstance,
         workspace_context: WorkspaceProcessContext,
         external_repo: ExternalRepository,
-        caplog: pytest.LogCaptureFixture,
         executor: ThreadPoolExecutor,
     ):
         freeze_datetime = to_timezone(
@@ -2334,10 +2330,8 @@ class TestSchedulerRun:
             )
 
             assert len(ticks) == 0
-
-            assert (
-                "Schedule simple_schedule was started from a location missing_location that can no"
-                " longer be found in the workspace" in caplog.text
+            assert not scheduler_instance.get_instigator_state(
+                schedule_state.instigator_origin_id, schedule_state.selector_id
             )
 
     @pytest.mark.parametrize("executor", get_schedule_executors())
