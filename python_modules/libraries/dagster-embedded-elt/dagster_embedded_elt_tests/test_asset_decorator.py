@@ -19,8 +19,7 @@ from dagster_embedded_elt.sling.resources import SlingConnectionResource, SlingR
 )
 def test_replication_param_defs(replication_params: SlingReplicationParam):
     @sling_assets(replication_config=replication_params)
-    def my_sling_assets():
-        ...
+    def my_sling_assets(): ...
 
     assert my_sling_assets.keys == {
         AssetKey.from_user_string(key)
@@ -40,8 +39,7 @@ def test_disabled_asset():
             __file__, "replication_configs/base_config_disabled/replication.yaml"
         )
     )
-    def my_sling_assets():
-        ...
+    def my_sling_assets(): ...
 
     assert my_sling_assets.keys == {
         AssetKey.from_user_string(key)
@@ -86,19 +84,16 @@ def test_runs_base_sling_config(
 
 def test_with_custom_name(replication_config: SlingReplicationParam):
     @sling_assets(replication_config=replication_config)
-    def my_sling_assets():
-        ...
+    def my_sling_assets(): ...
 
     assert my_sling_assets.op.name == "my_sling_assets"
 
     @sling_assets(replication_config=replication_config)
-    def my_other_assets():
-        ...
+    def my_other_assets(): ...
 
     assert my_other_assets.op.name == "my_other_assets"
 
     @sling_assets(replication_config=replication_config, name="custom_name")
-    def my_third_sling_assets():
-        ...
+    def my_third_sling_assets(): ...
 
     assert my_third_sling_assets.op.name == "custom_name"

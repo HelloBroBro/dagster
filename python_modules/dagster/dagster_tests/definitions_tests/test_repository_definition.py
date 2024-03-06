@@ -34,6 +34,7 @@ from dagster._check import CheckError
 from dagster._core.definitions.auto_materialize_sensor_definition import (
     AutoMaterializeSensorDefinition,
 )
+from dagster._core.definitions.decorators.asset_check_decorator import asset_check
 from dagster._core.definitions.executor_definition import multi_or_in_process_executor
 from dagster._core.definitions.partition import PartitionedConfig, StaticPartitionsDefinition
 from dagster._core.errors import DagsterInvalidSubsetError
@@ -653,6 +654,20 @@ def test_source_assets():
     all_assets = list(my_repo.assets_defs_by_key.values())
     assert len(all_assets) == 2
     assert {key.to_user_string() for a in all_assets for key in a.keys} == {"foo", "bar"}
+
+
+def test_assets_checks():
+    foo = SourceAsset(key=AssetKey("foo"))
+
+    @asset_check(asset=foo)
+    def foo_check():
+        return True
+
+    @repository
+    def my_repo():
+        return [foo, foo_check]
+
+    assert my_repo.asset_checks_defs_by_key[next(iter(foo_check.keys))] == foo_check
 
 
 def test_direct_assets():
@@ -1277,8 +1292,7 @@ def test_scheduled_partitioned_asset_job():
     partitions_def = DailyPartitionsDefinition(start_date="2022-06-06")
 
     @asset(partitions_def=partitions_def)
-    def asset1():
-        ...
+    def asset1(): ...
 
     @repository
     def repo():
@@ -1392,16 +1406,13 @@ def test_default_loggers_keys_conflict():
 
 def test_base_jobs():
     @asset
-    def asset1():
-        ...
+    def asset1(): ...
 
     @asset(partitions_def=StaticPartitionsDefinition(["a", "b", "c"]))
-    def asset2():
-        ...
+    def asset2(): ...
 
     @asset(partitions_def=StaticPartitionsDefinition(["x", "y", "z"]))
-    def asset3():
-        ...
+    def asset3(): ...
 
     @repository
     def repo():
@@ -1419,12 +1430,10 @@ def test_base_jobs():
 
 def test_auto_materialize_sensors_do_not_conflict():
     @asset
-    def asset1():
-        ...
+    def asset1(): ...
 
     @asset
-    def asset2():
-        ...
+    def asset2(): ...
 
     @repository
     def repo():
@@ -1438,12 +1447,10 @@ def test_auto_materialize_sensors_do_not_conflict():
 
 def test_auto_materialize_sensors_incomplete_cover():
     @asset
-    def asset1():
-        ...
+    def asset1(): ...
 
     @asset
-    def asset2():
-        ...
+    def asset2(): ...
 
     @repository
     def repo():
@@ -1456,12 +1463,10 @@ def test_auto_materialize_sensors_incomplete_cover():
 
 def test_auto_materialize_sensors_conflict():
     @asset
-    def asset1():
-        ...
+    def asset1(): ...
 
     @asset
-    def asset2():
-        ...
+    def asset2(): ...
 
     with pytest.raises(
         DagsterInvalidDefinitionError,
@@ -1483,12 +1488,10 @@ def test_invalid_asset_selection():
     source_asset = SourceAsset("source_asset")
 
     @asset
-    def asset1():
-        ...
+    def asset1(): ...
 
     @sensor(asset_selection=[source_asset, asset1])
-    def sensor1():
-        ...
+    def sensor1(): ...
 
     Definitions(assets=[source_asset, asset1], sensors=[sensor1])
 

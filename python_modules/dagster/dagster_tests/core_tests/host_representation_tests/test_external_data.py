@@ -568,7 +568,7 @@ def test_basic_multi_asset():
         Definitions(assets=[assets], jobs=[assets_job])
     )
 
-    atomic_execution_unit_id = assets.unique_id
+    execution_set_identifier = assets.unique_id
 
     assert external_asset_nodes == [
         ExternalAssetNode(
@@ -584,7 +584,7 @@ def test_basic_multi_asset():
             job_names=["__ASSET_JOB", "assets_job"],
             output_name=f"out{i}",
             group_name=DEFAULT_GROUP_NAME,
-            atomic_execution_unit_id=atomic_execution_unit_id,
+            execution_set_identifier=execution_set_identifier,
         )
         for i in range(10)
     ]
@@ -1123,8 +1123,7 @@ def test_nasty_nested_graph_asset():
 
 def test_deps_resolve_group():
     @asset(key_prefix="abc")
-    def asset1():
-        ...
+    def asset1(): ...
 
     @asset
     def asset2(asset1):
@@ -1256,8 +1255,7 @@ def test_external_multi_partitions_def():
 
 def test_graph_asset_description():
     @op
-    def op1():
-        ...
+    def op1(): ...
 
     @graph_asset(description="bar")
     def foo():
@@ -1273,12 +1271,10 @@ def test_graph_asset_description():
 
 def test_graph_multi_asset_description():
     @op
-    def op1():
-        ...
+    def op1(): ...
 
     @op
-    def op2():
-        ...
+    def op2(): ...
 
     @graph_multi_asset(
         outs={

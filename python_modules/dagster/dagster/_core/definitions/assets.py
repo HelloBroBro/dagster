@@ -23,6 +23,7 @@ from dagster._core.definitions.asset_check_spec import AssetCheckKey, AssetCheck
 from dagster._core.definitions.asset_layer import get_dep_node_handles_of_graph_backed_asset
 from dagster._core.definitions.asset_spec import (
     SYSTEM_METADATA_KEY_ASSET_EXECUTION_TYPE,
+    SYSTEM_METADATA_KEY_AUTO_CREATED_STUB_ASSET,
     SYSTEM_METADATA_KEY_AUTO_OBSERVE_INTERVAL_MINUTES,
     AssetExecutionType,
 )
@@ -938,6 +939,15 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             )
         return value
 
+    # Applies to AssetsDefinition that were auto-created because some asset referenced a key as a
+    # dependency, but no definition was provided for that key.
+    @property
+    def is_auto_created_stub(self) -> bool:
+        return (
+            self._get_external_asset_metadata_value(SYSTEM_METADATA_KEY_AUTO_CREATED_STUB_ASSET)
+            is not None
+        )
+
     def _get_external_asset_metadata_value(self, metadata_key: str) -> object:
         first_key = next(iter(self.keys), None)
         return self.metadata_by_key.get(first_key, {}).get(metadata_key) if first_key else None
@@ -1133,9 +1143,9 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 replaced_freshness_policy = self.freshness_policies_by_key.get(key)
 
             if replaced_freshness_policy:
-                replaced_freshness_policies_by_key[
-                    output_asset_key_replacements.get(key, key)
-                ] = replaced_freshness_policy
+                replaced_freshness_policies_by_key[output_asset_key_replacements.get(key, key)] = (
+                    replaced_freshness_policy
+                )
 
         if auto_materialize_policy:
             auto_materialize_policy_conflicts = (
