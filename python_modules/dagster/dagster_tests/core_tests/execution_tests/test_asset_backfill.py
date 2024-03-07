@@ -38,10 +38,10 @@ from dagster import (
     materialize,
     multi_asset,
 )
-from dagster._core.definitions.asset_graph import AssetGraph
 from dagster._core.definitions.asset_graph_subset import AssetGraphSubset
+from dagster._core.definitions.base_asset_graph import BaseAssetGraph
 from dagster._core.definitions.events import AssetKeyPartitionKey
-from dagster._core.definitions.external_asset_graph import ExternalAssetGraph
+from dagster._core.definitions.remote_asset_graph import RemoteAssetGraph
 from dagster._core.definitions.selector import (
     PartitionRangeSelector,
     PartitionsByAssetSelector,
@@ -436,7 +436,7 @@ def test_do_not_rerequest_while_existing_run_in_progress():
 
 def make_backfill_data(
     some_or_all: str,
-    asset_graph: ExternalAssetGraph,
+    asset_graph: RemoteAssetGraph,
     instance: DagsterInstance,
     current_time: datetime.datetime,
 ) -> AssetBackfillData:
@@ -459,7 +459,7 @@ def make_backfill_data(
 
 
 def make_random_subset(
-    asset_graph: ExternalAssetGraph,
+    asset_graph: RemoteAssetGraph,
     instance: DagsterInstance,
     evaluation_time: datetime.datetime,
 ) -> AssetGraphSubset:
@@ -493,7 +493,7 @@ def make_random_subset(
 
 def make_subset_from_partition_keys(
     partition_keys: Sequence[str],
-    asset_graph: ExternalAssetGraph,
+    asset_graph: RemoteAssetGraph,
     instance: DagsterInstance,
     evaluation_time: datetime.datetime,
 ) -> AssetGraphSubset:
@@ -516,7 +516,7 @@ def make_subset_from_partition_keys(
 
 def get_asset_graph(
     assets_by_repo_name: Mapping[str, Sequence[AssetsDefinition]],
-) -> ExternalAssetGraph:
+) -> RemoteAssetGraph:
     assets_defs_by_key = {
         key: assets_def
         for assets in assets_by_repo_name.values()
@@ -540,10 +540,11 @@ def get_asset_graph(
 def execute_asset_backfill_iteration_consume_generator(
     backfill_id: str,
     asset_backfill_data: AssetBackfillData,
-    asset_graph: ExternalAssetGraph,
+    asset_graph: RemoteAssetGraph,
     instance: DagsterInstance,
 ) -> AssetBackfillIterationResult:
-    traced_counter.set(Counter())
+    counter = Counter()
+    traced_counter.set(counter)
     with environ({"ASSET_BACKFILL_CURSOR_DELAY_TIME": "0"}):
         for result in execute_asset_backfill_iteration_inner(
             backfill_id=backfill_id,
@@ -556,15 +557,14 @@ def execute_asset_backfill_iteration_consume_generator(
             backfill_start_time=asset_backfill_data.backfill_start_time,
         ):
             if isinstance(result, AssetBackfillIterationResult):
-                counts = traced_counter.get().counts()
-                assert counts.get("DagsterInstance.get_dynamic_partitions", 0) <= 1
+                assert counter.counts().get("DagsterInstance.get_dynamic_partitions", 0) <= 1
                 return result
 
     assert False
 
 
 def run_backfill_to_completion(
-    asset_graph: ExternalAssetGraph,
+    asset_graph: RemoteAssetGraph,
     assets_by_repo_name: Mapping[str, Sequence[AssetsDefinition]],
     backfill_data: AssetBackfillData,
     fail_asset_partitions: Iterable[AssetKeyPartitionKey],
@@ -661,7 +661,7 @@ def run_backfill_to_completion(
 
 
 def _requested_asset_partitions_in_run_request(
-    run_request: RunRequest, asset_graph: AssetGraph
+    run_request: RunRequest, asset_graph: BaseAssetGraph
 ) -> Set[AssetKeyPartitionKey]:
     asset_keys = run_request.asset_selection
     assert asset_keys is not None
@@ -702,7 +702,7 @@ def _requested_asset_partitions_in_run_request(
 
 def external_asset_graph_from_assets_by_repo_name(
     assets_by_repo_name: Mapping[str, Sequence[AssetsDefinition]],
-) -> ExternalAssetGraph:
+) -> RemoteAssetGraph:
     from_repository_handles_and_external_asset_nodes = []
 
     for repo_name, assets in assets_by_repo_name.items():
@@ -710,14 +710,14 @@ def external_asset_graph_from_assets_by_repo_name(
 
         external_asset_nodes = external_asset_nodes_from_defs(
             repo.get_all_jobs(),
-            repo.assets_defs_by_key,
+            repo.asset_graph.assets_defs,
         )
         repo_handle = MagicMock(repository_name=repo_name)
         from_repository_handles_and_external_asset_nodes.extend(
             [(repo_handle, asset_node) for asset_node in external_asset_nodes]
         )
 
-    return ExternalAssetGraph.from_repository_handles_and_external_asset_nodes(
+    return RemoteAssetGraph.from_repository_handles_and_external_asset_nodes(
         from_repository_handles_and_external_asset_nodes, external_asset_checks=[]
     )
 

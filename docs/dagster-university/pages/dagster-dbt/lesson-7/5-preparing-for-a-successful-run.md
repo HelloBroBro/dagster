@@ -7,12 +7,12 @@ lesson: '7'
 # Preparing for a successful run
 
 {% callout %}
->💡 **Heads up! This section is optional.** The goal of this lesson was to teach you how to successfully **deploy** to Dagster Cloud, which you completed in the last section. Preparing for a successful run in Dagster Cloud requires using some external services, which may not translate to the external services so we’ve opted to make this section optional.
+>💡 **Heads up! This section is optional.** The goal of this lesson was to teach you how to successfully **deploy** to Dagster Cloud, which you completed in the last section. Preparing for a successful run in Dagster Cloud requires using some external services, which may not translate to the external services you prefer to use. As such, we’ve opted to make this section optional.
 {% /callout %}
 
 In previous lessons, you followed along by adding our example code to your local project. You successfully materialized the assets in the project and stored the resulting data in a local DuckDB database.
 
-**This section will be a little different.** To keep things simple, we’ll walk you through the steps required to run the pipeline successfully, but we won’t show you how to perform a run in this lesson. Production deployment can be complicated and require a lot of setup. We won't go through setting up the external resources because we want to focus on running your pipeline in Dagster Cloud. For this lesson, assume we already have our storage set up and ready to go.
+**This section will be a little different.** Production deployment can be complicated and require a lot of setup. To keep things simple we’ll walk you through the steps required to set up the pipeline for a successful run, but not how to set up external services. For this lesson, assume we already have our storage set up and ready to go.
 
 ---
 
@@ -39,7 +39,7 @@ We’ll show you how to do 4 and 5 so you can do this with your credentials when
 
 ## Adding a production target to profiles.yml
 
-The first step we’ll take is to add a second target to the `dagster_dbt_university` profile in our project’s `analytics/profiles.yml`. A [‘target’ in dbt](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles#understanding-targets-in-profiles) describes a connection to a data warehouse, which up until this point in the course, has a local DuckDB instance.
+The first step we’ll take is to add a second target to the `dagster_dbt_university` profile in our project’s `analytics/profiles.yml`. A [‘target’ in dbt](https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles#understanding-targets-in-profiles) describes a connection to a data warehouse, which up until this point in the course, has been a local DuckDB instance.
 
 To maintain the separation of our development and production environments, we’ll add a `prod` target to our project’s profiles:
 
@@ -55,7 +55,7 @@ dagster_dbt_university:
       path: '{{ env_var("MOTHERDUCK_TOKEN", "") }}'
 ```
 
-Because we’re still using DuckDB-backed database, our `type` will also be `duckdb` for `prod`. Save and commit the file to git before continuing.
+Because we’re still using a DuckDB-backed database, our `type` will also be `duckdb` for `prod`. Save and commit the file to git before continuing.
 
 **Note:** While dbt supports more platforms than just DuckDB, our project is set up to only work with this database type. If you use a different platform `type` for future projects, the configuration will vary depending on the platform being connected. Refer to [dbt’s documentation](https://docs.getdbt.com/docs/supported-data-platforms) for more information and examples.
 
@@ -99,12 +99,12 @@ The following table contains the environment variables we need to create in Dags
 ---
 
 - `DUCKDB_DATABASE`
-- todo
+- The service token for a Motherduck database, formatted as `md:?motherduck_token=<insert_token_here>`. Refer to the [Motherduck documentation](https://motherduck.com/docs/authenticating-to-motherduck/#authentication-using-a-service-token) for more info.
 
 ---
 
 - `DAGSTER_ENVIRONMENT`
-- Set this to `prod`
+- Set this to `prod`.
 
 ---
 
@@ -144,4 +144,5 @@ Repeat these steps until all the environment variables have been added.
 
 ## Running the pipeline
 
-TODO: Add once unblocked
+At this point, you're ready to run the pipeline in production! Navigate to the asset graph, click **Materialize all**, and watch as it all comes together:
+

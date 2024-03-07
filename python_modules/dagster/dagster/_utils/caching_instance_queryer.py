@@ -18,9 +18,9 @@ from typing import (
 import pendulum
 
 import dagster._check as check
-from dagster._core.definitions.asset_graph import AssetGraph
 from dagster._core.definitions.asset_graph_subset import AssetGraphSubset
 from dagster._core.definitions.asset_subset import AssetSubset, ValidAssetSubset
+from dagster._core.definitions.base_asset_graph import BaseAssetGraph
 from dagster._core.definitions.data_version import (
     DATA_VERSION_TAG,
     DataVersion,
@@ -67,7 +67,7 @@ class CachingInstanceQueryer(DynamicPartitionsStore):
     def __init__(
         self,
         instance: DagsterInstance,
-        asset_graph: AssetGraph,
+        asset_graph: BaseAssetGraph,
         evaluation_time: Optional[datetime] = None,
         logger: Optional[logging.Logger] = None,
     ):
@@ -96,7 +96,7 @@ class CachingInstanceQueryer(DynamicPartitionsStore):
         return self._instance
 
     @property
-    def asset_graph(self) -> AssetGraph:
+    def asset_graph(self) -> BaseAssetGraph:
         return self._asset_graph
 
     @property
@@ -383,7 +383,12 @@ class CachingInstanceQueryer(DynamicPartitionsStore):
         return None
 
     def run_has_tag(self, run_id: str, tag_key: str, tag_value: Optional[str]) -> bool:
-        run_tags = cast(DagsterRun, self._get_run_by_id(run_id)).tags
+        run = self._get_run_by_id(run_id)
+        if run is None:
+            return False
+
+        run_tags = run.tags
+
         if tag_value is None:
             return tag_key in run_tags
         else:

@@ -6,11 +6,13 @@ lesson: '3'
 
 # Viewing dbt models in the Dagster UI
 
-Once all the work above has been done, you’re ready to see your dbt models represented as assets! Here’s how you can find your models:
+Once you finished everything from the previous sections, you’re ready to see your dbt models represented as assets! Here’s how you can find your models:
 
-1. If you haven't yet, run `dagster dev` in your command line, and then navigate to the asset graph in the UI.
+1. If you haven't yet, run `dagster dev` in your command line and then navigate to the asset graph in the UI.
 2. Expand the `default` group in the asset graph.
 3. You should see your two dbt models, `stg_trips` and `stg_zones`, converted as assets within your Dagster project!
+
+   If you don't see the dbt models, click **Reload definitions** to have Dagster reload the code location.
 
    ![dbt assets with description metadata in the Dagster UI](/images/dagster-dbt/lesson-3/asset-description-metadata.png)
 
@@ -46,7 +48,7 @@ After clicking around a bit and seeing the dbt models within Dagster, the next s
 
 The run’s page should look similar to this:
 
-![TODO](/images/dagster-dbt/lesson-3/dbt-run-details-page.png)
+![Run details page in the Dagster UI](/images/dagster-dbt/lesson-3/dbt-run-details-page.png)
 
 Notice that there is only one “block,” or step, in this chart. That’s because Dagster runs dbt as it’s intended to be run: in a single execution of a `dbt` CLI command. This step will be named after the `@dbt_assets` -decorated asset, which we called `dbt_analytics` in the `assets/dbt.py` file.
 

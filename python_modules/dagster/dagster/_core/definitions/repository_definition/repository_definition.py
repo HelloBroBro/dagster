@@ -16,13 +16,13 @@ from typing import (
 import dagster._check as check
 from dagster._annotations import public
 from dagster._core.definitions.asset_check_spec import AssetCheckKey
+from dagster._core.definitions.asset_graph import AssetGraph
 from dagster._core.definitions.assets_job import (
     ASSET_BASE_JOB_PREFIX,
 )
 from dagster._core.definitions.cacheable_assets import AssetsDefinitionCacheableData
 from dagster._core.definitions.events import AssetKey, CoercibleToAssetKey
 from dagster._core.definitions.executor_definition import ExecutorDefinition
-from dagster._core.definitions.internal_asset_graph import InternalAssetGraph
 from dagster._core.definitions.job_definition import JobDefinition
 from dagster._core.definitions.logger_definition import LoggerDefinition
 from dagster._core.definitions.metadata import MetadataMapping
@@ -35,6 +35,7 @@ from dagster._core.errors import DagsterInvariantViolationError
 from dagster._core.instance import DagsterInstance
 from dagster._serdes import whitelist_for_serdes
 from dagster._utils import hash_collection
+from dagster._utils.cached_method import cached_method
 
 from .repository_data import CachingRepositoryData, RepositoryData
 from .valid_definitions import (
@@ -247,6 +248,16 @@ class RepositoryDefinition:
         """Mapping[AssetKey, SourceAsset]: The source assets defined in the repository."""
         return self._repository_data.get_source_assets_by_key()
 
+    # NOTE: `assets_defs_by_key` should generally not be used internally. It returns the
+    # `AssetsDefinition` supplied at repository construction time. Internally, assets defs should be
+    # obtained from the `AssetGraph` via `asset_graph.assets_defs`. This returns a normalized set of
+    # assets defs, where:
+    #
+    # - `SourceAsset` instances are replaced with external `AssetsDefinition`
+    # - Relative asset key dependencies are resolved
+    # - External `AssetsDefinition` have been generated for referenced asset keys without a
+    #   corresponding user-provided definition
+
     @public
     @property
     def assets_defs_by_key(self) -> Mapping[AssetKey, "AssetsDefinition"]:
@@ -258,10 +269,6 @@ class RepositoryDefinition:
     def asset_checks_defs_by_key(self) -> Mapping[AssetKey, "AssetChecksDefinition"]:
         """Mapping[AssetCheckKey, AssetChecksDefinition]: The assets checks defined in the repository."""
         return self._repository_data.get_asset_checks_defs_by_key()
-
-    @property
-    def external_assets_defs_by_key(self) -> Mapping[AssetKey, "AssetsDefinition"]:
-        return {k: v for k, v in self.assets_defs_by_key.items() if v.is_external}
 
     def has_implicit_global_asset_job_def(self) -> bool:
         """Returns true is there is a single implicit asset job for all asset keys in a repository."""
@@ -364,7 +371,11 @@ class RepositoryDefinition:
         """
         from dagster._core.storage.asset_value_loader import AssetValueLoader
 
-        with AssetValueLoader(self.assets_defs_by_key, instance=instance) as loader:
+        # The normalized assets defs must be obtained from the asset graph, not the repository data
+        normalized_assets_defs_by_key = {
+            k: ad for ad in self.asset_graph.assets_defs for k in ad.keys
+        }
+        with AssetValueLoader(normalized_assets_defs_by_key, instance=instance) as loader:
             return loader.load_asset_value(
                 asset_key,
                 python_type=python_type,
@@ -393,11 +404,22 @@ class RepositoryDefinition:
         """
         from dagster._core.storage.asset_value_loader import AssetValueLoader
 
-        return AssetValueLoader(self.assets_defs_by_key, instance=instance)
+        # The normalized assets defs must be obtained from the asset graph, not the repository data
+        normalized_assets_defs_by_key = {
+            k: ad for ad in self.asset_graph.assets_defs for k in ad.keys
+        }
+        return AssetValueLoader(normalized_assets_defs_by_key, instance=instance)
 
     @property
-    def asset_graph(self) -> InternalAssetGraph:
-        return InternalAssetGraph.from_assets(list(dict.fromkeys(self.assets_defs_by_key.values())))
+    @cached_method
+    def asset_graph(self) -> AssetGraph:
+        return AssetGraph.from_assets(
+            [
+                *list(dict.fromkeys(self.assets_defs_by_key.values())),
+                *self.source_assets_by_key.values(),
+            ],
+            list(dict.fromkeys(self.asset_checks_defs_by_key.values())),
+        )
 
     # If definition comes from the @repository decorator, then the __call__ method will be
     # overwritten. Therefore, we want to maintain the call-ability of repository definitions.

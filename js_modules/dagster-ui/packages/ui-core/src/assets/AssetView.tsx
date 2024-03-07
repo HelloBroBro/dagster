@@ -1,7 +1,7 @@
 import {gql, useQuery} from '@apollo/client';
 import {Alert, Box, ErrorBoundary, NonIdealState, Spinner, Tag} from '@dagster-io/ui-components';
 import {useContext, useEffect, useMemo} from 'react';
-import {Link, useLocation} from 'react-router-dom';
+import {Link, Redirect, useLocation} from 'react-router-dom';
 
 import {AssetEvents} from './AssetEvents';
 import {AssetFeatureContext} from './AssetFeatureContext';
@@ -21,11 +21,13 @@ import {AssetAutomaterializePolicyPage} from './AutoMaterializePolicyPage/AssetA
 import {AssetAutomaterializePolicyPageOld} from './AutoMaterializePolicyPageOld/AssetAutomaterializePolicyPage';
 import {useAutoMaterializeSensorFlag} from './AutoMaterializeSensorFlag';
 import {AutomaterializeDaemonStatusTag} from './AutomaterializeDaemonStatusTag';
+import {ChangedReasonsTag} from './ChangedReasons';
 import {LaunchAssetExecutionButton} from './LaunchAssetExecutionButton';
 import {LaunchAssetObservationButton} from './LaunchAssetObservationButton';
 import {OverdueTag} from './OverdueTag';
 import {UNDERLYING_OPS_ASSET_NODE_FRAGMENT} from './UnderlyingOpsOrGraph';
 import {AssetChecks} from './asset-checks/AssetChecks';
+import {assetDetailsPathForKey} from './assetDetailsPathForKey';
 import {AssetKey, AssetViewParams} from './types';
 import {
   AssetViewDefinitionNodeFragment,
@@ -45,7 +47,7 @@ import {
   tokenForAssetKey,
 } from '../asset-graph/Utils';
 import {useAssetGraphData} from '../asset-graph/useAssetGraphData';
-import {StaleReasonsTags} from '../assets/Stale';
+import {StaleReasonsTag} from '../assets/Stale';
 import {AssetComputeKindTag} from '../graph/OpTags';
 import {useQueryPersistedState} from '../hooks/useQueryPersistedState';
 import {RepositoryLink} from '../nav/RepositoryLink';
@@ -166,6 +168,10 @@ export const AssetView = ({assetKey, trace}: Props) => {
     if (definitionQueryResult.loading && !definitionQueryResult.previousData) {
       return <AssetLoadingDefinitionState />;
     }
+    if (definition?.isSource) {
+      return <Redirect to={assetDetailsPathForKey(assetKey, {view: 'events'})} />;
+    }
+
     return (
       <AssetPartitions
         assetKey={assetKey}
@@ -300,7 +306,7 @@ export const AssetView = ({assetKey, trace}: Props) => {
           <Box style={{margin: '-4px 0'}}>
             {definition && definition.isObservable ? (
               <LaunchAssetObservationButton
-                intent="primary"
+                primary
                 scope={{all: [definition], skipAllTerm: true}}
               />
             ) : definition && definition.jobNames.length > 0 && upstream ? (
@@ -526,12 +532,17 @@ const AssetViewPageHeaderTags = ({
     return (
       <>
         {definition ? (
-          <StaleReasonsTags
-            liveData={liveData}
-            assetKey={definition.assetKey}
-            onClick={onShowUpstream}
-            include="all"
-          />
+          <>
+            <StaleReasonsTag
+              liveData={liveData}
+              assetKey={definition.assetKey}
+              onClick={onShowUpstream}
+            />
+            <ChangedReasonsTag
+              changedReasons={liveData?.changedReasons}
+              assetKey={definition.assetKey}
+            />
+          </>
         ) : null}
         {definition?.isSource ? (
           <Tag>Source Asset</Tag>
@@ -567,17 +578,20 @@ const AssetViewPageHeaderTags = ({
       {definition && definition.freshnessPolicy && (
         <OverdueTag policy={definition.freshnessPolicy} assetKey={definition.assetKey} />
       )}
-      {definition && (
-        <StaleReasonsTags
-          liveData={liveData}
-          assetKey={definition.assetKey}
-          onClick={onShowUpstream}
-          include="all"
-        />
-      )}
-      {definition && (
-        <AssetComputeKindTag style={{position: 'relative'}} definition={definition} reduceColor />
-      )}
+      {definition ? (
+        <>
+          <StaleReasonsTag
+            liveData={liveData}
+            assetKey={definition.assetKey}
+            onClick={onShowUpstream}
+          />
+          <ChangedReasonsTag
+            changedReasons={liveData?.changedReasons}
+            assetKey={definition.assetKey}
+          />
+          <AssetComputeKindTag style={{position: 'relative'}} definition={definition} reduceColor />
+        </>
+      ) : null}
     </>
   );
 };

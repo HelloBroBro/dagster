@@ -26,26 +26,19 @@ To demonstrate, we’re going to intentionally make a bug in our dbt model code,
    from raw_zones
    ```
 
-2. Open a separate terminal instance and run:
+2. Navigate to the Dagster UI and reload the code location by either clicking the **Reload Definitions** button or using **Option+Shift+R**.
 
-   ```bash
-   cd analytics
-   dbt parse
-   ```
-
-3. Navigate to the Dagster UI and reload the code location by either clicking the **Reload Definitions** button or using **Option+Shift+R**. **Note:** Your first terminal window with `dagster dev` should still be running.
-
-4. On the asset graph, locate the `stg_zones` asset. You’ll see a yellow **Code version** tag indicating that Dagster recognized the SQL code changed:
+3. On the asset graph, locate the `stg_zones` asset. You’ll see a yellow **Code version** tag indicating that Dagster recognized the SQL code changed:
 
    ![dbt std_zones asset with a code version badge in the Dagster UI](/images/dagster-dbt/lesson-4/stg-zones-code-version.png)
 
-5. Select the `stg_zones` asset and click the **Materialize** button.
+4. Select the `stg_zones` asset and click the **Materialize** button.
 
-6. Navigate to the run’s details page.
+5. Navigate to the run’s details page.
 
-7. On the run’s details page, click the `dbt_analytics` step.
+6. On the run’s details page, click the `dbt_analytics` step.
 
-8. To view the logs, click the `stdout` button on the top-left of the pane. You’ll see the logs that typically come from executing `dbt`:
+7. To view the logs, click the `stdout` button on the top-left of the pane. You’ll see the logs that typically come from executing `dbt`:
 
    ![stdout logs showing failure for std_zones materialization in the Dagster UI](/images/dagster-dbt/lesson-4/stg-zones-stdout-failure.png)
 
@@ -54,8 +47,7 @@ In these logs, we can see that DuckDB can’t find the `zone_population` column 
 Now that we know what the problem is, let’s fix it:
 
 1. Remove the `zone_population` column from the `stg_zones` model
-2. Rebuild the dbt manifest by running `dbt parse` in the terminal
-3. In the Dagster UI, reload the code location to allow Dagster to pick up the changes.
+2. In the Dagster UI, reload the code location to allow Dagster to pick up the changes.
 
 At this point, if you materialize the  `stg_zones` asset again, the run should be successful:
 

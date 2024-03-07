@@ -1,6 +1,7 @@
 import logging
 import random
 import string
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -37,6 +38,7 @@ from dagster import (
     repository,
     run_failure_sensor,
 )
+from dagster._core.definitions.asset_graph import AssetGraph
 from dagster._core.definitions.auto_materialize_sensor_definition import (
     AutoMaterializeSensorDefinition,
 )
@@ -44,7 +46,6 @@ from dagster._core.definitions.decorators import op
 from dagster._core.definitions.decorators.job_decorator import job
 from dagster._core.definitions.decorators.sensor_decorator import asset_sensor, sensor
 from dagster._core.definitions.instigation_logger import get_instigation_log_records
-from dagster._core.definitions.internal_asset_graph import InternalAssetGraph
 from dagster._core.definitions.run_request import InstigatorType, SensorResult
 from dagster._core.definitions.run_status_sensor_definition import run_status_sensor
 from dagster._core.definitions.sensor_definition import (
@@ -83,6 +84,7 @@ from dagster._core.test_utils import (
 )
 from dagster._core.workspace.context import WorkspaceProcessContext
 from dagster._daemon import get_default_daemon_logger
+from dagster._daemon.daemon import SpanMarker
 from dagster._daemon.sensor import execute_sensor_iteration, execute_sensor_iteration_loop
 from dagster._seven.compat.pendulum import (
     _IS_PENDULUM_3,
@@ -719,7 +721,7 @@ def partitioned_asset():
 daily_partitioned_job = define_asset_job(
     "daily_partitioned_job",
     partitions_def=daily_partitions_def,
-).resolve(asset_graph=InternalAssetGraph.from_assets([partitioned_asset]))
+).resolve(asset_graph=AssetGraph.from_assets([partitioned_asset]))
 
 
 @run_status_sensor(run_status=DagsterRunStatus.SUCCESS, monitored_jobs=[daily_partitioned_job])
@@ -1202,9 +1204,6 @@ def test_bad_load_sensor_repository(
         assert instance.get_runs_count() == 0
         ticks = instance.get_ticks(invalid_state.instigator_origin_id, invalid_state.selector_id)
         assert len(ticks) == 0
-        assert instance.get_instigator_state(
-            invalid_state.instigator_origin_id, invalid_state.selector_id
-        )
 
 
 def test_bad_load_sensor(executor, instance, workspace_context, external_repo):
@@ -1237,9 +1236,6 @@ def test_bad_load_sensor(executor, instance, workspace_context, external_repo):
         assert instance.get_runs_count() == 0
         ticks = instance.get_ticks(invalid_state.instigator_origin_id, invalid_state.selector_id)
         assert len(ticks) == 0
-        assert instance.get_instigator_state(
-            invalid_state.instigator_origin_id, invalid_state.selector_id
-        )
 
 
 def test_error_sensor(caplog, executor, instance, workspace_context, external_repo):
@@ -1559,6 +1555,25 @@ def test_custom_interval_sensor(executor, instance, workspace_context, external_
 
         expected_datetime = create_pendulum_time(year=2019, month=2, day=28, hour=0, minute=1)
         validate_tick(ticks[0], external_sensor, expected_datetime, TickStatus.SKIPPED)
+
+
+def test_sensor_spans(workspace_context):
+    loop = execute_sensor_iteration_loop(
+        workspace_context,
+        get_default_daemon_logger("dagster.daemon.SensorDaemon"),
+        shutdown_event=threading.Event(),
+    )
+
+    assert next(loop) == SpanMarker.START_SPAN
+
+    for _i in range(10):
+        next_span = next(loop)
+        assert (
+            next_span != SpanMarker.START_SPAN
+        ), "Started another span before finishing the previous one"
+
+        if next_span == SpanMarker.END_SPAN:
+            break
 
 
 @pytest.mark.skipif(_IS_PENDULUM_3, reason="pendulum.set_test_now not supported in pendulum 3")

@@ -8,7 +8,6 @@ from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Dict,
-    Iterator,
     List,
     Mapping,
     NamedTuple,
@@ -20,7 +19,7 @@ from typing import (
 )
 
 import pendulum
-from typing_extensions import Self, TypeAlias
+from typing_extensions import Self
 
 import dagster._check as check
 import dagster._seven as seven
@@ -63,11 +62,12 @@ from dagster._utils.merger import merge_dicts
 if TYPE_CHECKING:
     from pendulum.datetime import DateTime
 
+    from dagster._daemon.daemon import DaemonIterator
+
+
 MIN_INTERVAL_LOOP_TIME = 5
 
 FINISHED_TICK_STATES = [TickStatus.SKIPPED, TickStatus.SUCCESS, TickStatus.FAILURE]
-
-TDaemonGenerator: TypeAlias = Iterator[Optional[SerializableErrorInfo]]
 
 
 class DagsterSensorDaemonError(DagsterError):
@@ -241,9 +241,6 @@ class SensorLaunchContext(AbstractContextManager):
             )
 
 
-VERBOSE_LOGS_INTERVAL = 60
-
-
 def execute_sensor_iteration_loop(
     workspace_process_context: IWorkspaceProcessContext,
     logger: logging.Logger,
@@ -251,40 +248,34 @@ def execute_sensor_iteration_loop(
     until: Optional[float] = None,
     threadpool_executor: Optional[ThreadPoolExecutor] = None,
     submit_threadpool_executor: Optional[ThreadPoolExecutor] = None,
-) -> TDaemonGenerator:
+) -> "DaemonIterator":
     """Helper function that performs sensor evaluations on a tighter loop, while reusing grpc locations
     within a given daemon interval.  Rather than relying on the daemon machinery to run the
     iteration loop every 30 seconds, sensors are continuously evaluated, every 5 seconds. We rely on
     each sensor definition's min_interval to check that sensor evaluations are spaced appropriately.
     """
+    from dagster._daemon.daemon import SpanMarker
+
     sensor_tick_futures: Dict[str, Future] = {}
-    last_verbose_time = None
     while True:
         start_time = pendulum.now("UTC").timestamp()
         if until and start_time >= until:
             # provide a way of organically ending the loop to support test environment
             break
 
-        # occasionally enable verbose logging (doing it always would be too much)
-        verbose_logs_iteration = (
-            last_verbose_time is None or start_time - last_verbose_time > VERBOSE_LOGS_INTERVAL
-        )
+        yield SpanMarker.START_SPAN
         yield from execute_sensor_iteration(
             workspace_process_context,
             logger,
             threadpool_executor=threadpool_executor,
             submit_threadpool_executor=submit_threadpool_executor,
             sensor_tick_futures=sensor_tick_futures,
-            log_verbose_checks=verbose_logs_iteration,
         )
         # Yield to check for heartbeats in case there were no yields within
         # execute_sensor_iteration
-        yield None
+        yield SpanMarker.END_SPAN
 
         end_time = pendulum.now("UTC").timestamp()
-
-        if verbose_logs_iteration:
-            last_verbose_time = end_time
 
         loop_duration = end_time - start_time
         sleep_time = max(0, MIN_INTERVAL_LOOP_TIME - loop_duration)
@@ -299,7 +290,6 @@ def execute_sensor_iteration(
     threadpool_executor: Optional[ThreadPoolExecutor],
     submit_threadpool_executor: Optional[ThreadPoolExecutor],
     sensor_tick_futures: Optional[Dict[str, Future]] = None,
-    log_verbose_checks: bool = True,
     debug_crash_flags: Optional[DebugCrashFlags] = None,
 ):
     instance = workspace_process_context.instance
@@ -323,7 +313,6 @@ def execute_sensor_iteration(
     tick_retention_settings = instance.get_tick_retention_settings(InstigatorType.SENSOR)
 
     sensors: Dict[str, ExternalSensor] = {}
-
     for location_entry in workspace_snapshot.values():
         code_location = location_entry.code_location
         if code_location:
@@ -337,16 +326,8 @@ def execute_sensor_iteration(
                         all_sensor_states.get(selector_id)
                     ).is_running:
                         sensors[selector_id] = sensor
-        elif location_entry.load_error:
-            if log_verbose_checks:
-                logger.warning(
-                    f"Could not load location {location_entry.origin.location_name} to check for"
-                    f" sensors due to the following error: {location_entry.load_error}"
-                )
 
     if not sensors:
-        if log_verbose_checks:
-            logger.debug("Not checking for any runs since no sensors have been started.")
         yield
         return
 
