@@ -22,7 +22,7 @@ from dagster._core.definitions.backfill_policy import BackfillPolicy
 from dagster._core.definitions.data_version import CachingStaleStatusResolver
 from dagster._core.definitions.decorators.source_asset_decorator import observable_source_asset
 from dagster._core.definitions.remote_asset_graph import RemoteAssetGraph
-from dagster._core.host_representation import InProcessCodeLocationOrigin
+from dagster._core.remote_representation import InProcessCodeLocationOrigin
 from dagster._core.test_utils import instance_for_test
 from dagster._core.types.loadable_target_origin import LoadableTargetOrigin
 from dagster._core.workspace.context import WorkspaceRequestContext
@@ -235,8 +235,8 @@ def test_cross_repo_dep_no_source_asset(instance):
 def test_partitioned_source_asset(instance):
     asset_graph = RemoteAssetGraph.from_workspace(_make_context(instance, ["partitioned_defs"]))
 
-    assert asset_graph.is_partitioned(AssetKey("partitioned_source"))
-    assert asset_graph.is_partitioned(AssetKey("downstream_of_partitioned_source"))
+    assert asset_graph.get(AssetKey("partitioned_source")).is_partitioned
+    assert asset_graph.get(AssetKey("downstream_of_partitioned_source")).is_partitioned
 
 
 def test_get_implicit_job_name_for_assets(instance):
