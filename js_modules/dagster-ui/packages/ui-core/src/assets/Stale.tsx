@@ -26,7 +26,6 @@ import {numberFormatter} from '../ui/formatters';
 type StaleDataForNode = {
   staleCauses?: LiveDataForNode['staleCauses'];
   staleStatus?: LiveDataForNode['staleStatus'];
-  changedReasons?: LiveDataForNode['changedReasons'];
 };
 export const isAssetMissing = (liveData?: Pick<StaleDataForNode, 'staleStatus'>) =>
   liveData && liveData.staleStatus === StaleStatus.MISSING;
@@ -115,7 +114,7 @@ export const StaleReasonsTag = ({
   if (!isAssetStale(liveData) || !liveData?.staleCauses?.length) {
     return <div />;
   }
-  const label = <Caption>Outdated ({numberFormatter.format(liveData.staleCauses.length)})</Caption>;
+  const label = <Caption>Unsynced ({numberFormatter.format(liveData.staleCauses.length)})</Caption>;
   return (
     <Box
       flex={{gap: 4, alignItems: 'center', justifyContent: 'space-between'}}
