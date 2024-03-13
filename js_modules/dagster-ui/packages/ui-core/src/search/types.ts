@@ -14,12 +14,33 @@ export enum SearchResultType {
   Resource,
 }
 
+export enum AssetFilterSearchResultType {
+  // Add types with corresponding strings to distinguish
+  // between SearchResultType.AssetGroup
+  ComputeKind = 'AssetFilterSearchResultType.ComputeKind',
+  CodeLocation = 'AssetFilterSearchResultType.CodeLocation',
+  Owner = 'AssetFilterSearchResultType.Owner',
+  AssetGroup = 'AssetFilterSearchResultType.AssetGroup',
+}
+
+export function isAssetFilterSearchResultType(
+  type: SearchResultType | AssetFilterSearchResultType,
+): type is AssetFilterSearchResultType {
+  return (
+    type === AssetFilterSearchResultType.AssetGroup ||
+    type === AssetFilterSearchResultType.CodeLocation ||
+    type === AssetFilterSearchResultType.ComputeKind ||
+    type === AssetFilterSearchResultType.Owner
+  );
+}
+
 export type SearchResult = {
   label: string;
   description: string;
   href: string;
-  type: SearchResultType;
+  type: SearchResultType | AssetFilterSearchResultType;
   tags?: string;
+  numResults?: number;
 };
 
 export type ReadyResponse = {type: 'ready'};

@@ -1,5 +1,5 @@
 import {useQuery} from '@apollo/client';
-import {Box, Colors, Heading, Icon, Page, Spinner, TextInput} from '@dagster-io/ui-components';
+import {Box, Colors, Heading, Icon, Page, Spinner} from '@dagster-io/ui-components';
 import qs from 'qs';
 import {useContext} from 'react';
 import {Link, useParams} from 'react-router-dom';
@@ -8,7 +8,7 @@ import styled from 'styled-components';
 import {AssetGlobalLineageButton, AssetPageHeader} from './AssetPageHeader';
 import {ASSET_CATALOG_TABLE_QUERY} from './AssetsCatalogTable';
 import {fetchRecentlyVisitedAssetsFromLocalStorage} from './RecentlyVisitedAssetsStorage';
-import {AssetTableFragment} from './types/AssetTableFragment.types';
+import {AssetTableDefinitionFragment} from './types/AssetTableFragment.types';
 import {
   AssetCatalogTableQuery,
   AssetCatalogTableQueryVariables,
@@ -20,6 +20,7 @@ import {displayNameForAssetKey} from '../asset-graph/Utils';
 import {TagIcon} from '../graph/OpTags';
 import {useDocumentTitle} from '../hooks/useDocumentTitle';
 import {useLaunchPadHooks} from '../launchpad/LaunchpadHooksContext';
+import {AssetSearch} from '../search/AssetSearch';
 import {ReloadAllButton} from '../workspace/ReloadAllButton';
 import {buildRepoPathForHuman} from '../workspace/buildRepoAddress';
 import {repoAddressAsHumanString, repoAddressAsURLString} from '../workspace/repoAddressAsString';
@@ -33,7 +34,7 @@ type AssetCountsResult = {
   countPerCodeLocation: CountPerCodeLocation[];
 };
 
-type GroupMetadata = {
+export type GroupMetadata = {
   groupName: string;
   repositoryLocationName: string;
   repositoryName: string;
@@ -49,7 +50,14 @@ type CountPerCodeLocation = {
   assetCount: number;
 };
 
-function buildAssetCountBySection(assets: AssetTableFragment[]): AssetCountsResult {
+type AssetDefinitionMetadata = {
+  definition: Pick<
+    AssetTableDefinitionFragment,
+    'owners' | 'computeKind' | 'groupName' | 'repository'
+  > | null;
+};
+
+export function buildAssetCountBySection(assets: AssetDefinitionMetadata[]): AssetCountsResult {
   const assetCountByOwner: Record<string, number> = {};
   const assetCountByComputeKind: Record<string, number> = {};
   const assetCountByGroup: Record<string, number> = {};
@@ -173,7 +181,7 @@ const linkToAssetGraphComputeKind = (computeKind: string) => {
   })}`;
 };
 
-const linkToCodeLocation = (repoAddress: RepoAddress) => {
+export const linkToCodeLocation = (repoAddress: RepoAddress) => {
   return `/locations/${repoAddressAsURLString(repoAddress)}/assets`;
 };
 
@@ -227,7 +235,7 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
       />
       <Box flex={{direction: 'column'}} style={{height: '100%', overflow: 'auto'}}>
         <Box padding={64} flex={{justifyContent: 'center', alignItems: 'center'}}>
-          <Box style={{width: '60%'}} flex={{direction: 'column', gap: 16}}>
+          <Box style={{width: '60%', minWidth: '600px'}} flex={{direction: 'column', gap: 16}}>
             <Box flex={{direction: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
               <Heading>
                 {getGreeting(timezone)}
@@ -238,7 +246,7 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
                 <AssetGlobalLineageButton />
               </Box>
             </Box>
-            <TextInput />
+            <AssetSearch />
           </Box>
         </Box>
         <Box flex={{direction: 'column'}}>
@@ -259,7 +267,7 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
           )}
           {Object.keys(assetCountBySection.countsByOwner).length > 0 && (
             <>
-              <SectionHeader sectionName="Owner" />
+              <SectionHeader sectionName="Owners" />
               <SectionBody>
                 {Object.entries(assetCountBySection.countsByOwner).map(([label, count]) => (
                   <CountForAssetType key={label} assetsCount={count}>
@@ -271,7 +279,7 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
           )}
           {Object.keys(assetCountBySection.countsByComputeKind).length > 0 && (
             <>
-              <SectionHeader sectionName="Compute kind" />
+              <SectionHeader sectionName="Compute kinds" />
               <SectionBody>
                 {Object.entries(assetCountBySection.countsByComputeKind).map(([label, count]) => (
                   <CountForAssetType key={label} assetsCount={count}>
