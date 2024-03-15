@@ -192,7 +192,7 @@ def _create_asset_run(
         # likely is outdated and targeting the wrong job, refetch the asset
         # graph from the workspace
         workspace = workspace_process_context.create_request_context()
-        asset_graph = RemoteAssetGraph.from_workspace(workspace)
+        asset_graph = workspace.asset_graph
 
     check.failed(
         f"Failed to target asset selection {run_request.asset_selection} in run after retrying."
@@ -297,7 +297,7 @@ def submit_asset_runs_in_chunks(
         chunk_submitted_runs: List[Tuple[RunRequest, DagsterRun]] = []
         retryable_error_raised = False
 
-        logger.critical(f"{chunk_size}, {chunk_start}, {len(run_request_chunk)}")
+        logger.debug(f"{chunk_size}, {chunk_start}, {len(run_request_chunk)}")
 
         # submit each run in the chunk
         for chunk_idx, run_request in enumerate(run_request_chunk):
