@@ -18,6 +18,7 @@ export type AssetCheckTableFragment = {
       __typename: 'AssetCheckEvaluation';
       severity: Types.AssetCheckSeverity;
       timestamp: number;
+      description: string | null;
       targetMaterialization: {
         __typename: 'AssetCheckEvaluationTargetMaterializationData';
         timestamp: number;
@@ -139,7 +140,7 @@ export type AssetCheckTableFragment = {
         | {__typename: 'TextMetadataEntry'; text: string; label: string; description: string | null}
         | {
             __typename: 'TimestampMetadataEntry';
-            timestamp: number | null;
+            timestamp: number;
             label: string;
             description: string | null;
           }

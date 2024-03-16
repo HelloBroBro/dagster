@@ -927,6 +927,7 @@ type AssetCheckEvaluation {
   targetMaterialization: AssetCheckEvaluationTargetMaterializationData
   metadataEntries: [MetadataEntry!]!
   severity: AssetCheckSeverity!
+  description: String
   success: Boolean!
 }
 
@@ -2672,7 +2673,7 @@ type NullMetadataEntry implements MetadataEntry {
 type TimestampMetadataEntry implements MetadataEntry {
   label: String!
   description: String
-  timestamp: Float
+  timestamp: Float!
 }
 
 scalar Cursor
