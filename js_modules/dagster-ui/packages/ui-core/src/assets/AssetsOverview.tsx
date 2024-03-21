@@ -1,5 +1,5 @@
 import {useQuery} from '@apollo/client';
-import {Box, Colors, Heading, Icon, Page, Spinner} from '@dagster-io/ui-components';
+import {Box, Colors, Heading, Icon, MiddleTruncate, Page, Spinner} from '@dagster-io/ui-components';
 import qs from 'qs';
 import {useContext} from 'react';
 import {Link, useParams} from 'react-router-dom';
@@ -22,6 +22,7 @@ import {TagIcon} from '../graph/OpTags';
 import {useDocumentTitle} from '../hooks/useDocumentTitle';
 import {useLaunchPadHooks} from '../launchpad/LaunchpadHooksContext';
 import {AssetSearch} from '../search/AssetSearch';
+import {AnchorButton} from '../ui/AnchorButton';
 import {ReloadAllButton} from '../workspace/ReloadAllButton';
 import {buildRepoPathForHuman} from '../workspace/buildRepoAddress';
 import {repoAddressAsHumanString, repoAddressAsURLString} from '../workspace/repoAddressAsString';
@@ -185,13 +186,22 @@ function getGreeting(timezone: string) {
 
 const CountForAssetType = ({children, assetsCount}: AssetOverviewCategoryProps) => {
   return (
-    <Box
-      flex={{direction: 'row', justifyContent: 'space-between', alignItems: 'center'}}
-      style={{width: 'calc(33% - 16px)'}}
-    >
-      <Box flex={{direction: 'row', gap: 4, alignItems: 'center'}}>{children}</Box>
-      {assetsCount !== 0 && <AssetCount>{assetsCount} assets</AssetCount>}
-    </Box>
+    <GridItem>
+      <Box
+        flex={{direction: 'row', alignItems: 'center', gap: 4}}
+        style={{overflow: 'hidden', color: Colors.textLighter()}}
+      >
+        {children}
+      </Box>
+      <span
+        style={{
+          ...TextOverflowStyle,
+          ...{color: Colors.textLight(), fontSize: '14px', textAlign: 'right'},
+        }}
+      >
+        {assetsCount} assets
+      </span>
+    </GridItem>
   );
 };
 
@@ -203,18 +213,6 @@ const SectionHeader = ({sectionName}: {sectionName: string}) => {
       border="top-and-bottom"
     >
       <SectionName>{sectionName}</SectionName>
-    </Box>
-  );
-};
-
-const SectionBody = ({children}: {children: React.ReactNode}) => {
-  return (
-    <Box
-      padding={{horizontal: 24, vertical: 16}}
-      flex={{wrap: 'wrap'}}
-      style={{rowGap: '14px', columnGap: '24px'}}
-    >
-      {children}
     </Box>
   );
 };
@@ -287,15 +285,23 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
         right={<ReloadAllButton label="Reload definitions" />}
       />
       <Box flex={{direction: 'column'}} style={{height: '100%', overflow: 'auto'}}>
-        <Box padding={64} flex={{justifyContent: 'center', alignItems: 'center'}}>
+        <Box
+          padding={64}
+          flex={{justifyContent: 'center', alignItems: 'center'}}
+          style={{
+            background: Colors.blueGradient(),
+          }}
+        >
           <Box style={{width: '60%', minWidth: '600px'}} flex={{direction: 'column', gap: 16}}>
             <Box flex={{direction: 'row', alignItems: 'center', justifyContent: 'space-between'}}>
               <Heading>
                 {getGreeting(timezone)}
                 {viewerFirstName ? `, ${viewerFirstName}` : ''}
               </Heading>
-              <Box flex={{direction: 'row', gap: 16, alignItems: 'center'}}>
-                <Link to="/assets">View all</Link>
+              <Box flex={{direction: 'row', alignItems: 'center', gap: 6}}>
+                <AnchorButton intent="primary" outlined to="/assets">
+                  View all assets
+                </AnchorButton>
                 <AssetGlobalLineageButton />
               </Box>
             </Box>
@@ -306,22 +312,22 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
           {recentlyVisitedAssets.length > 0 && (
             <>
               <SectionHeader sectionName="Recently visited" />
-              <SectionBody>
+              <GridStyle>
                 {recentlyVisitedAssets.map((assetKey, idx) => (
                   <CountForAssetType key={idx} assetsCount={0}>
                     <Icon name="asset" />
-                    <Link to={`/assets/${assetKey.path.join('/')}`}>
+                    <Link to={`/assets/${assetKey.path.join('/')}`} style={TextOverflowStyle}>
                       {displayNameForAssetKey(assetKey)}
                     </Link>
                   </CountForAssetType>
                 ))}
-              </SectionBody>
+              </GridStyle>
             </>
           )}
           {Object.keys(assetCountBySection.countsByOwner).length > 0 && (
             <>
               <SectionHeader sectionName="Owners" />
-              <SectionBody>
+              <GridStyle>
                 {assetCountBySection.countsByOwner.map(({owner, assetCount}) => (
                   <CountForAssetType key={owner} assetsCount={assetCount}>
                     <Link to={linkToAssetGraphOwner(owner)}>
@@ -329,62 +335,70 @@ export const AssetsOverview = ({viewerName}: {viewerName?: string}) => {
                     </Link>
                   </CountForAssetType>
                 ))}
-              </SectionBody>
+              </GridStyle>
             </>
           )}
           {Object.keys(assetCountBySection.countsByComputeKind).length > 0 && (
             <>
               <SectionHeader sectionName="Compute kinds" />
-              <SectionBody>
+              <GridStyle>
                 {assetCountBySection.countsByComputeKind.map(({computeKind, assetCount}) => (
                   <CountForAssetType key={computeKind} assetsCount={assetCount}>
                     <TagIcon label={computeKind} />
-                    <Link to={linkToAssetGraphComputeKind(computeKind)}>{computeKind}</Link>
+                    <Link to={linkToAssetGraphComputeKind(computeKind)} style={TextOverflowStyle}>
+                      {computeKind}
+                    </Link>
                   </CountForAssetType>
                 ))}
-              </SectionBody>
+              </GridStyle>
             </>
           )}
           {assetCountBySection.countPerAssetGroup.length > 0 && (
             <>
               <SectionHeader sectionName="Asset groups" />
-              <SectionBody>
+              <GridStyle>
                 {assetCountBySection.countPerAssetGroup.map((assetGroupCount) => (
                   <CountForAssetType
                     key={JSON.stringify(assetGroupCount.groupMetadata)}
                     assetsCount={assetGroupCount.assetCount}
                   >
                     <Icon name="asset_group" />
-                    <Link to={linkToAssetGraphGroup(assetGroupCount.groupMetadata)}>
+                    <Link
+                      to={linkToAssetGraphGroup(assetGroupCount.groupMetadata)}
+                      style={TextOverflowStyle}
+                    >
                       {assetGroupCount.groupMetadata.groupName}
                     </Link>
-                    <span style={{color: Colors.textLighter()}}>
-                      {repoAddressAsHumanString({
+                    <MiddleTruncate
+                      text={repoAddressAsHumanString({
                         name: assetGroupCount.groupMetadata.repositoryName,
                         location: assetGroupCount.groupMetadata.repositoryLocationName,
                       })}
-                    </span>
+                    />
                   </CountForAssetType>
                 ))}
-              </SectionBody>
+              </GridStyle>
             </>
           )}
           {assetCountBySection.countPerCodeLocation.length > 0 && (
             <>
               <SectionHeader sectionName="Code locations" />
-              <SectionBody>
+              <GridStyle>
                 {assetCountBySection.countPerCodeLocation.map((countPerCodeLocation) => (
                   <CountForAssetType
                     key={repoAddressAsHumanString(countPerCodeLocation.repoAddress)}
                     assetsCount={countPerCodeLocation.assetCount}
                   >
                     <Icon name="folder" />
-                    <Link to={linkToCodeLocation(countPerCodeLocation.repoAddress)}>
+                    <Link
+                      to={linkToCodeLocation(countPerCodeLocation.repoAddress)}
+                      style={TextOverflowStyle}
+                    >
                       {repoAddressAsHumanString(countPerCodeLocation.repoAddress)}
                     </Link>
                   </CountForAssetType>
                 ))}
-              </SectionBody>
+              </GridStyle>
             </>
           )}
         </Box>
@@ -403,7 +417,24 @@ const SectionName = styled.span`
   font-size: 12px;
 `;
 
-const AssetCount = styled.span`
-  color: ${Colors.textLight()};
-  font-size: 14px;
+const TextOverflowStyle: React.CSSProperties = {
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
+const GridStyle = styled.div`
+  padding: 16px 12px;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  @media (max-width: 768px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+`;
+
+const GridItem = styled.div`
+  padding: 6px 12px;
+  display: flex;
+  justify-content: space-between;
 `;
