@@ -3,6 +3,7 @@ from typing import Sequence, Union, cast
 import pendulum
 
 from dagster import _check as check
+from dagster._annotations import experimental
 from dagster._core.definitions.asset_check_spec import AssetCheckSeverity
 from dagster._core.definitions.decorators.asset_check_decorator import asset_check
 from dagster._core.definitions.metadata import TimestampMetadataValue
@@ -17,13 +18,20 @@ from ..time_window_partitions import TimeWindowPartitionsDefinition
 from .utils import (
     DEFAULT_FRESHNESS_CRON_TIMEZONE,
     DEFAULT_FRESHNESS_SEVERITY,
+    FRESHNESS_CRON_METADATA_KEY,
+    FRESHNESS_CRON_TIMEZONE_METADATA_KEY,
     asset_to_keys_iterable,
     ensure_no_duplicate_assets,
     get_last_updated_timestamp,
     retrieve_latest_record,
 )
 
+TIME_WINDOW_PARTITIONED_FRESHNESS_PARAMS_METADATA_KEY = (
+    "dagster/time_window_partitioned_freshness_params"
+)
 
+
+@experimental
 def build_freshness_checks_for_time_window_partitioned_assets(
     *,
     assets: Sequence[Union[SourceAsset, CoercibleToAssetKey, AssetsDefinition]],
@@ -87,6 +95,12 @@ def _build_freshness_checks_for_asset(
             asset=asset_key,
             description="Evaluates freshness for targeted asset.",
             name="freshness_check",
+            metadata={
+                TIME_WINDOW_PARTITIONED_FRESHNESS_PARAMS_METADATA_KEY: {
+                    FRESHNESS_CRON_METADATA_KEY: freshness_cron,
+                    FRESHNESS_CRON_TIMEZONE_METADATA_KEY: freshness_cron_timezone,
+                }
+            },
         )
         def the_check(context: AssetExecutionContext) -> AssetCheckResult:
             current_time = pendulum.now()

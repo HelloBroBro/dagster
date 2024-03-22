@@ -1,18 +1,21 @@
 import {Box, Heading, PageHeader} from '@dagster-io/ui-components';
 
-import {OverviewTabs} from './OverviewTabs';
+import {JobsPageContent} from './JobsPageContent';
 import {useTrackPageView} from '../app/analytics';
 import {useDocumentTitle} from '../hooks/useDocumentTitle';
-import {JobsPageContent} from '../jobs/JobsPageContent';
 
-export const OverviewJobsRoot = () => {
+export const JobsRoot = () => {
   useTrackPageView();
-  useDocumentTitle('Overview | Jobs');
+  useDocumentTitle('Jobs');
 
   return (
     <Box flex={{direction: 'column'}} style={{height: '100%', overflow: 'hidden'}}>
-      <PageHeader title={<Heading>Overview</Heading>} tabs={<OverviewTabs tab="jobs" />} />
+      <PageHeader title={<Heading>Jobs</Heading>} />
       <JobsPageContent />
     </Box>
   );
 };
+
+// Imported via React.lazy, which requires a default export.
+// eslint-disable-next-line import/no-default-export
+export default JobsRoot;

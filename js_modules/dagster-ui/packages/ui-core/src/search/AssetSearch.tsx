@@ -1,12 +1,12 @@
-import {Colors, Icon, Spinner} from '@dagster-io/ui-components';
+import {Colors, Icon, IconWrapper, Spinner, UnstyledButton} from '@dagster-io/ui-components';
 import Fuse from 'fuse.js';
 import debounce from 'lodash/debounce';
 import * as React from 'react';
 import {useHistory} from 'react-router-dom';
 import styled from 'styled-components';
 
-import {SearchBox, SearchInput} from './SearchDialog';
-import {SearchResults} from './SearchResults';
+import {SearchInput} from './SearchDialog';
+import {SearchResultItem, SearchResultsList, SearchResultsProps} from './SearchResults';
 import {SearchResult, SearchResultType, isAssetFilterSearchResultType} from './types';
 import {useGlobalSearch} from './useGlobalSearch';
 import {Trace, createTrace} from '../performance';
@@ -19,19 +19,32 @@ type State = {
   searching: boolean;
   secondaryResults: Fuse.FuseResult<SearchResult>[];
   highlight: number;
+  showResults: boolean;
 };
 
 type Action =
+  | {type: 'show-results'}
+  | {type: 'hide-results'}
   | {type: 'highlight'; highlight: number}
   | {type: 'change-query'; queryString: string}
   | {type: 'complete-secondary'; queryString: string; results: Fuse.FuseResult<SearchResult>[]};
 
 const reducer = (state: State, action: Action) => {
   switch (action.type) {
+    case 'show-results':
+      return {...state, showResults: true};
+    case 'hide-results':
+      return {...state, showResults: false};
     case 'highlight':
       return {...state, highlight: action.highlight};
     case 'change-query':
-      return {...state, queryString: action.queryString, searching: true, highlight: 0};
+      return {
+        ...state,
+        queryString: action.queryString,
+        searching: true,
+        highlight: 0,
+        showResults: true,
+      };
     case 'complete-secondary':
       // If the received results match the current querystring, use them. Otherwise discard.
       const secondaryResults =
@@ -47,6 +60,7 @@ const initialState: State = {
   searching: false,
   secondaryResults: [],
   highlight: 0,
+  showResults: false,
 };
 
 const DEBOUNCE_MSEC = 100;
@@ -72,7 +86,7 @@ export const AssetSearch = () => {
   });
 
   const [state, dispatch] = React.useReducer(reducer, initialState);
-  const {queryString, secondaryResults, highlight} = state;
+  const {queryString, secondaryResults, highlight, showResults} = state;
 
   const {assetResults, assetFilterResults} = groupSearchResults(secondaryResults);
 
@@ -84,6 +98,24 @@ export const AssetSearch = () => {
 
   const isFirstSearch = React.useRef(true);
   const firstSearchTrace = React.useRef<null | Trace>(null);
+
+  const showSearchResults = React.useCallback(() => {
+    dispatch({type: 'show-results'});
+  }, []);
+
+  const searchRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    function handleClickOutsideSearch(event: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        dispatch({type: 'hide-results'});
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutsideSearch);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutsideSearch);
+    };
+  }, [searchRef]);
 
   React.useEffect(() => {
     initialize();
@@ -133,6 +165,11 @@ export const AssetSearch = () => {
   const onKeyDown = (e: React.KeyboardEvent) => {
     const {key} = e;
 
+    if (key === 'Escape') {
+      dispatch({type: 'hide-results'});
+      return;
+    }
+
     if (!numRenderedResults) {
       return;
     }
@@ -162,42 +199,154 @@ export const AssetSearch = () => {
     }
   };
 
+  const rightElement = () => {
+    if (loading) {
+      return <Spinner purpose="body-text" />;
+    }
+    if (queryString.length) {
+      return (
+        <ClearButton
+          onMouseDown={(e: React.MouseEvent<HTMLButtonElement>) => {
+            // Prevent default to avoid stealing focus from the input.
+            e.preventDefault();
+            dispatch({type: 'change-query', queryString: ''});
+          }}
+        >
+          <Icon name="close" size={20} color={Colors.textDisabled()} />
+        </ClearButton>
+      );
+    }
+    return null;
+  };
+
   return (
-    <SearchInputWrapper>
-      <SearchBox hasQueryString={!!queryString.length}>
-        <Icon name="search" color={Colors.accentGray()} size={20} />
-        <SearchInput
-          data-search-input="1"
-          autoFocus
-          spellCheck={false}
-          onChange={onChange}
-          onKeyDown={onKeyDown}
-          placeholder="Search assets"
-          type="text"
-          value={queryString}
-        />
-        {loading ? <Spinner purpose="body-text" /> : null}
-      </SearchBox>
-      <SearchResultsWrapper>
-        <SearchResults
-          highlight={highlight}
-          queryString={queryString}
-          results={renderedAssetResults}
-          filterResults={renderedFilterResults}
-          onClickResult={onClickResult}
-        />
-      </SearchResultsWrapper>
-    </SearchInputWrapper>
+    <div ref={searchRef}>
+      <SearchInputWrapper>
+        <AssetSearchBox $showingResults={!!queryString.length && showResults}>
+          <Icon name="search" color={Colors.accentGray()} size={20} />
+          <SearchInput
+            data-search-input="1"
+            autoFocus
+            spellCheck={false}
+            onChange={onChange}
+            onKeyDown={onKeyDown}
+            placeholder="Search assets"
+            type="text"
+            value={queryString}
+            onClick={showSearchResults}
+          />
+          {rightElement()}
+        </AssetSearchBox>
+        {showResults && (
+          <SearchResultsWrapper>
+            <AssetSearchResults
+              highlight={highlight}
+              queryString={queryString}
+              results={renderedAssetResults}
+              filterResults={renderedFilterResults}
+              onClickResult={onClickResult}
+            />
+          </SearchResultsWrapper>
+        )}
+      </SearchInputWrapper>
+    </div>
   );
 };
+
+interface Props extends SearchResultsProps {
+  filterResults: Fuse.FuseResult<SearchResult>[];
+}
+
+const AssetSearchResults = (props: Props) => {
+  const {highlight, onClickResult, queryString, results, filterResults} = props;
+
+  if (!results.length && !filterResults.length && queryString) {
+    return <NoAssetResults>No results</NoAssetResults>;
+  }
+
+  return (
+    <SearchResultsList hasResults={!!results.length || !!filterResults.length}>
+      {results.map((result, ii) => (
+        <SearchResultItem
+          key={result.item.href}
+          isHighlight={highlight === ii}
+          result={result}
+          onClickResult={onClickResult}
+        />
+      ))}
+      {filterResults.length > 0 ? (
+        <>
+          <MatchingFiltersHeader>Matching filters</MatchingFiltersHeader>
+          {filterResults.map((result, ii) => (
+            <SearchResultItem
+              key={result.item.href}
+              isHighlight={highlight === ii + results.length}
+              result={result}
+              onClickResult={onClickResult}
+            />
+          ))}
+        </>
+      ) : null}
+    </SearchResultsList>
+  );
+};
+
+interface AssetSearchBoxProps {
+  readonly $showingResults: boolean;
+}
+
+const AssetSearchBox = styled.div<AssetSearchBoxProps>`
+  background: ${Colors.backgroundDefault()};
+  border-radius: ${({$showingResults}) => ($showingResults ? '8px 8px 0 0' : '8px')};
+  border: none;
+  align-items: center;
+  box-shadow: ${({$showingResults}) =>
+      $showingResults ? Colors.keylineDefault() : Colors.borderDefault()}
+    inset 0px 0px 0px 1px;
+  display: flex;
+  padding: 12px 16px 12px 12px;
+  transition: all 100ms linear;
+
+  :hover {
+    box-shadow: ${({$showingResults}) =>
+        $showingResults ? Colors.keylineDefault() : Colors.borderHover()}
+      inset 0px 0px 0px 1px;
+  }
+`;
+
+const ClearButton = styled(UnstyledButton)`
+  ${IconWrapper} {
+    transition: background-color 100ms linear;
+    :hover {
+      background-color: ${Colors.textDefault()};
+    }
+  }
+`;
 
 const SearchInputWrapper = styled.div`
   position: relative;
 `;
 
 const SearchResultsWrapper = styled.div`
-  top: 60px;
+  top: 48px;
+  left: 1px;
   position: absolute;
   z-index: 1;
-  width: 100%;
+  width: calc(100% - 2px);
+`;
+
+const NoAssetResults = styled.div`
+  background-color: ${Colors.backgroundDefault()};
+  border-radius: 0 0 8px 8px;
+  color: ${Colors.textLighter()};
+  font-size: 16px;
+  padding: 16px;
+`;
+
+const MatchingFiltersHeader = styled.li`
+  background-color: ${Colors.backgroundDefault()};
+  padding: 8px 12px;
+  border-bottom: 1px solid ${Colors.backgroundGray()};
+  color: ${Colors.textLight()};
+  font-weight: 500;
 `;
