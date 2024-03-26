@@ -1,4 +1,5 @@
 import {Box} from '@dagster-io/ui-components';
+import React from 'react';
 import {useHistory} from 'react-router-dom';
 
 import {TopNavLink} from './AppTopNav';
@@ -22,7 +23,7 @@ export const AppTopNavLinks = ({links}: {links: AppNavLinkType[]}) => {
 export const navLinks = (history: ReturnType<typeof useHistory>) => {
   return [
     {
-      title: 'overview',
+      title: 'overview' as const,
       element: (
         <ShortcutHandler
           key="overview"
@@ -37,7 +38,7 @@ export const navLinks = (history: ReturnType<typeof useHistory>) => {
       ),
     },
     {
-      title: 'runs',
+      title: 'runs' as const,
       element: (
         <ShortcutHandler
           key="runs"
@@ -52,7 +53,7 @@ export const navLinks = (history: ReturnType<typeof useHistory>) => {
       ),
     },
     {
-      title: 'assets',
+      title: 'assets' as const,
       element: (
         <ShortcutHandler
           key="assets"
@@ -61,7 +62,7 @@ export const navLinks = (history: ReturnType<typeof useHistory>) => {
           shortcutFilter={(e) => e.altKey && e.code === 'Digit3'}
         >
           <TopNavLink
-            to={featureEnabled(FeatureFlag.flagUseNewOverviewPage) ? '/assets-overview' : '/assets'}
+            to="/assets"
             data-cy="AppTopNav_AssetsLink"
             isActive={(_, location) => {
               const {pathname} = location;
@@ -76,7 +77,7 @@ export const navLinks = (history: ReturnType<typeof useHistory>) => {
     },
     featureEnabled(FeatureFlag.flagSettingsPage)
       ? {
-          title: 'settings',
+          title: 'settings' as const,
           element: (
             <ShortcutHandler
               key="settings"
@@ -101,7 +102,7 @@ export const navLinks = (history: ReturnType<typeof useHistory>) => {
           ),
         }
       : {
-          title: 'deployment',
+          title: 'deployment' as const,
           element: (
             <ShortcutHandler
               key="deployment"

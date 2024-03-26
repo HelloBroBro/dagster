@@ -240,6 +240,7 @@ def build_schedule_from_dbt_selection(
     cron_schedule: str,
     dbt_select: str = "fqn:*",
     dbt_exclude: Optional[str] = None,
+    schedule_name: Optional[str] = None,
     tags: Optional[Mapping[str, str]] = None,
     config: Optional[RunConfig] = None,
     execution_timezone: Optional[str] = None,
@@ -255,6 +256,7 @@ def build_schedule_from_dbt_selection(
         cron_schedule (str): The cron schedule to define the schedule.
         dbt_select (str): A dbt selection string to specify a set of dbt resources.
         dbt_exclude (Optional[str]): A dbt selection string to exclude a set of dbt resources.
+        schedule_name (Optional[str]): The name of the dbt schedule to create.
         tags (Optional[Mapping[str, str]]): A dictionary of tags (string key-value pairs) to attach
             to the scheduled runs.
         config (Optional[RunConfig]): The config that parameterizes the execution of this schedule.
@@ -282,6 +284,7 @@ def build_schedule_from_dbt_selection(
             )
     """
     return ScheduleDefinition(
+        name=schedule_name,
         cron_schedule=cron_schedule,
         job=define_asset_job(
             name=job_name,
@@ -786,24 +789,3 @@ def has_self_dependency(dbt_resource_props: Mapping[str, Any]) -> bool:
     has_self_dependency = dagster_metadata.get("has_self_dependency", False)
 
     return has_self_dependency
-
-
-from dagster import MaterializeResult, asset
-from pydantic import BaseModel
-
-
-class ColumnLineage(BaseModel):
-    bar: str
-
-
-@asset
-def my_asset():
-    mat_result = MaterializeResult(metadata={"foo": ColumnLineage(bar="baz")})
-    assert mat_result.get_event_log_representation().metadata["foo"] == {"bar": "baz"}
-    assert mat_result.metadata["foo"] == ColumnLineage(bar="baz")
-
-    mat_result = MaterializeResult(
-        metadata=dict(TableMetadataEntries(column_lineage=ColumnLineage(bar="baz")))
-    )
-    assert mat_result.get_event_log_representation().metadata["foo"] == {"bar": "baz"}
-    assert mat_result.metadata["foo"] == ColumnLineage(bar="baz")

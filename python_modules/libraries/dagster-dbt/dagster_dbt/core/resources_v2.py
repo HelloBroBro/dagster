@@ -277,46 +277,6 @@ class DbtCliEventMessage:
                         metadata=metadata,
                     )
 
-    def _process_adapter_response_metadata(
-        self, adapter_response: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Process the adapter response metadata for a dbt CLI event.
-
-        The main interface for AdapterResponse is found at https://github.com/dbt-labs/dbt-adapters.
-
-        Currently, we pre-process the following dbt adapters, which have custom responses:
-
-        - https://github.com/dbt-labs/dbt-bigquery: BigQueryAdapterResponse
-        - https://github.com/databricks/dbt-databricks: DatabricksAdapterResponse
-        - https://github.com/dbt-labs/dbt-snowflake: SnowflakeAdapterResponse
-        - https://github.com/starburstdata/dbt-trino: TrinoAdapterResponse
-        """
-        allowlisted_adapter_response_keys = [
-            # AdapterResponse
-            *[
-                "rows_affected",
-            ],
-            # BigQueryAdapterResponse
-            *[
-                "bytes_processed",
-                "bytes_billed",
-                "job_id",
-                "slot_ms",
-            ],
-            # DatabricksAdapterResponse, SnowflakeAdapterResponse, TrinoAdapterResponse
-            *[
-                "query_id",
-            ],
-        ]
-
-        processed_adapter_response = {
-            key: value
-            for key, value in adapter_response.items()
-            if (key in allowlisted_adapter_response_keys and value)
-        }
-
-        return processed_adapter_response
-
     def _build_column_lineage_metadata(
         self,
         manifest: Mapping[str, Any],
@@ -379,21 +339,25 @@ class DbtCliEventMessage:
         # 3. For each column, retrieve its dependencies on upstream columns from direct parents.
         deps_by_column: Dict[str, Sequence[TableColumnDep]] = {}
         for column_name in column_names:
-            dbt_parent_resource_props_by_alias: Dict[str, Dict[str, Any]] = {
-                parent_dbt_resource_props["alias"]: parent_dbt_resource_props
-                for parent_dbt_resource_props in map(
-                    lambda parent_unique_id: manifest["nodes"][parent_unique_id],
-                    dbt_resource_props["depends_on"]["nodes"],
-                )
-            }
+            dbt_parent_resource_props_by_identifier: Dict[str, Dict[str, Any]] = {}
+            for parent_unique_id in dbt_resource_props["depends_on"]["nodes"]:
+                is_resource_type_source = parent_unique_id.startswith("source")
+                if is_resource_type_source:
+                    parent_dbt_resource_props = manifest["sources"][parent_unique_id]
+                    identifier = parent_dbt_resource_props["name"]
+                else:
+                    parent_dbt_resource_props = manifest["nodes"][parent_unique_id]
+                    identifier = parent_dbt_resource_props["alias"]
+
+                dbt_parent_resource_props_by_identifier[identifier] = parent_dbt_resource_props
 
             column_deps: Sequence[TableColumnDep] = []
             for sqlglot_lineage_node in lineage(
                 column=column_name, sql=optimized_node_ast, schema=sqlglot_mapping_schema
             ).walk():
                 column = sqlglot_lineage_node.expression.find(exp.Column)
-                if column and column.table in dbt_parent_resource_props_by_alias:
-                    parent_resource_props = dbt_parent_resource_props_by_alias[column.table]
+                if column and column.table in dbt_parent_resource_props_by_identifier:
+                    parent_resource_props = dbt_parent_resource_props_by_identifier[column.table]
                     parent_asset_key = dagster_dbt_translator.get_asset_key(parent_resource_props)
 
                     column_deps.append(
@@ -590,8 +554,9 @@ class DbtCliInvocation:
             try:
                 raw_event: Dict[str, Any] = orjson.loads(log)
                 unique_id: Optional[str] = raw_event["data"].get("node_info", {}).get("unique_id")
+                is_result_event = DbtCliEventMessage.is_result_event(raw_event)
                 event_history_metadata: Dict[str, Any] = {}
-                if unique_id and DbtCliEventMessage.is_result_event(raw_event):
+                if unique_id and is_result_event:
                     event_history_metadata = copy.deepcopy(
                         event_history_metadata_by_unique_id.get(unique_id, {})
                     )
@@ -602,7 +567,7 @@ class DbtCliInvocation:
 
                 # Parse the error message from the event, if it exists.
                 is_error_message = event.log_level == "error"
-                if is_error_message:
+                if is_error_message and not is_result_event:
                     self._error_messages.append(str(event))
 
                 # Attempt to parse the column level metadata from the event message.
@@ -696,9 +661,13 @@ class DbtCliInvocation:
         if not self._error_messages:
             return ""
 
-        error_description = "\n".join(self._error_messages)
-
-        return f"\n\nErrors parsed from dbt logs:\n{error_description}"
+        return "\n\n".join(
+            [
+                "",
+                "Errors parsed from dbt logs:",
+                *self._error_messages,
+            ]
+        )
 
     def _raise_on_error(self) -> None:
         """Ensure that the dbt CLI process has completed. If the process has not successfully
@@ -717,10 +686,11 @@ class DbtCliInvocation:
 
             raise DagsterDbtCliRuntimeError(
                 description=(
-                    f"The dbt CLI process with command `{self.dbt_command}` failed with exit code"
-                    f" {self.process.returncode}. Check the stdout in the Dagster compute logs for"
-                    f" the full information about the error{extra_description}."
-                    f"{self._format_error_messages()}"
+                    f"The dbt CLI process with command\n\n"
+                    f"`{self.dbt_command}`\n\n"
+                    f"failed with exit code `{self.process.returncode}`."
+                    " Check the stdout in the Dagster compute logs for the full information about"
+                    f" the error{extra_description}.{self._format_error_messages()}"
                 ),
             )
 
