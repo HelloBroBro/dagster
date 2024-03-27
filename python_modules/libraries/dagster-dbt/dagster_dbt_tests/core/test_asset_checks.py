@@ -202,11 +202,18 @@ def test_with_asset_checks(
             name="unique_fail_tests_model_id",
             asset=AssetKey(["fail_tests_model"]),
         ),
+        "customers_singular_test_with_single_dependency": AssetCheckSpec(
+            name="singular_test_with_single_dependency",
+            asset=AssetKey(["customers"]),
+        ),
+        "customers_singular_test_with_meta_and_multiple_dependencies": AssetCheckSpec(
+            name="singular_test_with_meta_and_multiple_dependencies",
+            asset=AssetKey(["customers"]),
+            additional_deps=[
+                AssetKey(["orders"]),
+            ],
+        ),
     }
-
-    # dbt singular tests are not modeled as Dagster asset checks
-    for check_spec in assets_def.check_specs_by_output_name.values():
-        assert "assert_singular_test_is_not_asset_check" != check_spec.name
 
     result = materialize(
         [assets_def],
@@ -214,7 +221,7 @@ def test_with_asset_checks(
         raise_on_error=False,
     )
 
-    assert not result.get_asset_observation_events()
+    assert result.get_asset_observation_events()
     assert result.get_asset_check_evaluations()
 
 
@@ -285,7 +292,8 @@ def test_materialize_no_selection(
     )
     assert not result.success  # fail_tests_model fails
     assert len(result.get_asset_materialization_events()) == 10
-    assert len(result.get_asset_check_evaluations()) == 24
+    assert len(result.get_asset_check_evaluations()) == 26
+    assert len(result.get_asset_observation_events()) == 2
 
 
 def test_materialize_asset_and_checks(
@@ -298,7 +306,38 @@ def test_materialize_asset_and_checks(
     )
     assert result.success
     assert len(result.get_asset_materialization_events()) == 1
-    assert len(result.get_asset_check_evaluations()) == 2
+    assert len(result.get_asset_check_evaluations()) == 4
+    assert len(result.get_asset_observation_events()) == 6
+    # no tests were excluded, so we include singular and relationship tests
+    assert {
+        (e.asset_key, e.asset_observation_data.asset_observation.metadata.get("unique_id").value)  # type: ignore[attr-defined]
+        for e in result.get_asset_observation_events()
+    } == {
+        (
+            AssetKey(["customers"]),
+            "test.test_dagster_asset_checks.relationships_with_duplicate_orders_ref_customers___customer_id__customer_id__ref_customers_.d9e47ca78e",
+        ),
+        (
+            AssetKey(["customers"]),
+            "test.test_dagster_asset_checks.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2",
+        ),
+        (
+            AssetKey(["customers"]),
+            "test.test_dagster_asset_checks.singular_test_with_no_meta_and_multiple_dependencies",
+        ),
+        (
+            AssetKey(["orders"]),
+            "test.test_dagster_asset_checks.relationships_with_duplicate_orders_ref_customers___customer_id__customer_id__ref_customers_.d9e47ca78e",
+        ),
+        (
+            AssetKey(["orders"]),
+            "test.test_dagster_asset_checks.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2",
+        ),
+        (
+            AssetKey(["orders"]),
+            "test.test_dagster_asset_checks.singular_test_with_no_meta_and_multiple_dependencies",
+        ),
+    }
 
 
 def test_materialize_asset_no_checks(
@@ -312,6 +351,8 @@ def test_materialize_asset_no_checks(
     assert result.success
     assert len(result.get_asset_materialization_events()) == 1
     assert len(result.get_asset_check_evaluations()) == 0
+    # since checks are exclued, we don't run the singular or relationship tests
+    assert len(result.get_asset_observation_events()) == 0
 
 
 def test_materialize_checks_no_asset(
@@ -327,7 +368,10 @@ def test_materialize_checks_no_asset(
     )
     assert result.success
     assert len(result.get_asset_materialization_events()) == 0
-    assert len(result.get_asset_check_evaluations()) == 2
+    assert len(result.get_asset_check_evaluations()) == 4
+    # since we're not materializing the asset, we can't use indirect selection and therefore
+    # don't run the singular or relationship tests
+    assert len(result.get_asset_observation_events()) == 0
 
 
 def test_asset_checks_results(
@@ -432,6 +476,13 @@ def test_select_model_with_tests(
     assert my_dbt_assets.check_keys == {
         AssetCheckKey(asset_key=AssetKey(["customers"]), name="unique_customers_customer_id"),
         AssetCheckKey(asset_key=AssetKey(["customers"]), name="not_null_customers_customer_id"),
+        AssetCheckKey(
+            asset_key=AssetKey(["customers"]), name="singular_test_with_single_dependency"
+        ),
+        AssetCheckKey(
+            asset_key=AssetKey(["customers"]),
+            name="singular_test_with_meta_and_multiple_dependencies",
+        ),
     }
 
     result = materialize(
@@ -441,4 +492,35 @@ def test_select_model_with_tests(
 
     assert result.success
     assert len(result.get_asset_materialization_events()) == 1
-    assert len(result.get_asset_check_evaluations()) == 2
+    assert len(result.get_asset_check_evaluations()) == 4
+    # no tests were excluded, so we include singular and relationship tests
+    assert len(result.get_asset_observation_events()) == 6
+    assert {
+        (e.asset_key, e.asset_observation_data.asset_observation.metadata.get("unique_id").value)  # type: ignore[attr-defined]
+        for e in result.get_asset_observation_events()
+    } == {
+        (
+            AssetKey(["customers"]),
+            "test.test_dagster_asset_checks.relationships_with_duplicate_orders_ref_customers___customer_id__customer_id__ref_customers_.d9e47ca78e",
+        ),
+        (
+            AssetKey(["customers"]),
+            "test.test_dagster_asset_checks.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2",
+        ),
+        (
+            AssetKey(["customers"]),
+            "test.test_dagster_asset_checks.singular_test_with_no_meta_and_multiple_dependencies",
+        ),
+        (
+            AssetKey(["orders"]),
+            "test.test_dagster_asset_checks.relationships_with_duplicate_orders_ref_customers___customer_id__customer_id__ref_customers_.d9e47ca78e",
+        ),
+        (
+            AssetKey(["orders"]),
+            "test.test_dagster_asset_checks.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2",
+        ),
+        (
+            AssetKey(["orders"]),
+            "test.test_dagster_asset_checks.singular_test_with_no_meta_and_multiple_dependencies",
+        ),
+    }
