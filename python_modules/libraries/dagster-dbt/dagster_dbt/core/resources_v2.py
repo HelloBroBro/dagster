@@ -86,6 +86,7 @@ from ..dbt_manifest import (
     DbtManifestParam,
     validate_manifest,
 )
+from ..dbt_project import DbtProject
 from ..errors import DagsterDbtCliRuntimeError
 from ..utils import (
     ASSET_RESOURCE_TYPES,
@@ -814,6 +815,8 @@ class DbtCliResource(ConfigurableResource):
             https://docs.getdbt.com/docs/core/connect-data-platform/connection-profiles for more
             information.
         dbt_executable (str): The path to the dbt executable. By default, this is `dbt`.
+        state_dir (Optional[str]): The path to a directory of dbt artifacts to be used
+            with the --state or --defer-state cli arguments.
 
     Examples:
         Creating a dbt resource with only a reference to ``project_dir``:
@@ -914,6 +917,40 @@ class DbtCliResource(ConfigurableResource):
         default=DBT_EXECUTABLE,
         description="The path to the dbt executable.",
     )
+    state_dir: Optional[str] = Field(
+        description=(
+            "The path to a directory of dbt artifacts to be used with --state / --defer-state. "
+            "This can be used with methods such as get_defer_args to allow for a @dbt_assets to "
+            "use defer in the appropriate environments."
+        )
+    )
+
+    def __init__(
+        self,
+        project_dir: Union[str, DbtProject],
+        global_config_flags: Optional[List[str]] = None,
+        profiles_dir: Optional[str] = None,
+        profile: Optional[str] = None,
+        target: Optional[str] = None,
+        dbt_executable: str = DBT_EXECUTABLE,
+        state_dir: Optional[str] = None,
+    ):
+        if isinstance(project_dir, DbtProject):
+            populated_state_dir = project_dir.get_state_dir_if_populated()
+            if state_dir is None and populated_state_dir:
+                state_dir = os.fspath(populated_state_dir)
+            project_dir = os.fspath(project_dir.project_dir)
+
+        # static typing doesn't understand whats going on here, thinks these fields dont exist
+        super().__init__(
+            project_dir=project_dir,  # type: ignore
+            global_config_flags=global_config_flags or [],  # type: ignore
+            profiles_dir=profiles_dir,  # type: ignore
+            profile=profile,  # type: ignore
+            target=target,  # type: ignore
+            dbt_executable=dbt_executable,  # type: ignore
+            state_dir=state_dir,  # type: ignore
+        )
 
     @classmethod
     def _validate_absolute_path_exists(cls, path: Union[str, Path]) -> Path:
@@ -1001,6 +1038,23 @@ class DbtCliResource(ConfigurableResource):
 
         return values
 
+    @validator("state_dir")
+    def validate_state_dir(cls, state_dir: Optional[str]) -> Optional[str]:
+        if state_dir is None:
+            return None
+
+        resolved_state_dir = cls._validate_absolute_path_exists(state_dir)
+        cls._validate_path_contains_file(
+            path=resolved_state_dir,
+            file_name="manifest.json",
+            error_message=(
+                f"{resolved_state_dir} does not contain a manifest.json file. Please"
+                " specify a valid path to a dbt state directory."
+            ),
+        )
+
+        return os.fspath(resolved_state_dir)
+
     def _get_unique_target_path(self, *, context: Optional[OpExecutionContext]) -> Path:
         """Get a unique target path for the dbt CLI invocation.
 
@@ -1034,6 +1088,21 @@ class DbtCliResource(ConfigurableResource):
         # reset the adapter since the dummy flags may be different from the flags for the actual subcommand
         reset_adapters()
         return adapter
+
+    def get_defer_args(self) -> Sequence[str]:
+        """Returns ('--defer', '--defer-state', state_artifacts_dir) if state_dir was
+        specified and contains a manifest.json, () otherwise.
+        """
+        if version.parse(dbt_version) < version.parse("1.6.0"):
+            state_flag = "--state"
+        else:
+            # Use the more scoped --defer-state on versions it is available
+            state_flag = "--defer-state"
+
+        if self.state_dir and Path(self.state_dir).joinpath("manifest.json").exists():
+            return ("--defer", state_flag, self.state_dir)
+        else:
+            return ()
 
     @public
     def cli(
@@ -1182,6 +1251,10 @@ class DbtCliResource(ConfigurableResource):
 
         target_path = target_path or self._get_unique_target_path(context=context)
         env = {
+            # Allow IO streaming when running in Windows.
+            # Also, allow it to be overriden by the current environment.
+            "PYTHONLEGACYWINDOWSSTDIO": "1",
+            # Pass the current environment variables to the dbt CLI invocation.
             **os.environ.copy(),
             # An environment variable to indicate that the dbt CLI is being invoked from Dagster.
             "DAGSTER_DBT_CLI": "true",
