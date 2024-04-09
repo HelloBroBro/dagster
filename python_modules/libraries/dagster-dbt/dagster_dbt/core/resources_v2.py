@@ -19,6 +19,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
     cast,
@@ -393,19 +394,24 @@ class DbtCliEventMessage:
             )
 
         node_sql_path = target_path.joinpath(
-            "run", manifest["metadata"]["project_name"], dbt_resource_props["original_file_path"]
+            "compiled",
+            manifest["metadata"]["project_name"],
+            dbt_resource_props["original_file_path"],
         )
         optimized_node_ast = cast(
             exp.Query,
             optimize(
-                parse_one(sql=node_sql_path.read_text(), dialect=sql_dialect).expression,
+                parse_one(sql=node_sql_path.read_text(), dialect=sql_dialect),
                 schema=sqlglot_mapping_schema,
                 dialect=sql_dialect,
             ),
         )
 
         # 2. Retrieve the column names from the current node.
-        column_names = optimized_node_ast.named_selects
+        schema_column_names = {
+            column.lower() for column in self._event_history_metadata["columns"].keys()
+        }
+        sqlglot_column_names = set(optimized_node_ast.named_selects)
 
         # 3. For each column, retrieve its dependencies on upstream columns from direct parents.
         dbt_parent_resource_props_by_relation_name: Dict[str, Dict[str, Any]] = {}
@@ -423,9 +429,29 @@ class DbtCliEventMessage:
                 parent_dbt_resource_props
             )
 
+        normalized_sqlglot_column_names = {
+            sqlglot_column.lower() for sqlglot_column in sqlglot_column_names
+        }
+        implicit_alias_column_names = {
+            column
+            for column in schema_column_names
+            if column not in normalized_sqlglot_column_names
+        }
+
         deps_by_column: Dict[str, Sequence[TableColumnDep]] = {}
-        for column_name in column_names:
-            column_deps: Sequence[TableColumnDep] = []
+        if implicit_alias_column_names:
+            logger.warning(
+                "The following columns are implicitly aliased and will be marked with an "
+                f" empty list column dependencies: `{implicit_alias_column_names}`."
+            )
+
+            deps_by_column = {column: [] for column in implicit_alias_column_names}
+
+        for column_name in sqlglot_column_names:
+            if column_name.lower() not in schema_column_names:
+                continue
+
+            column_deps: Set[TableColumnDep] = set()
             for sqlglot_lineage_node in lineage(
                 column=column_name,
                 sql=optimized_node_ast,
@@ -451,14 +477,14 @@ class DbtCliEventMessage:
                     continue
 
                 # Add the column dependency.
-                column_deps.append(
+                column_deps.add(
                     TableColumnDep(
                         asset_key=dagster_dbt_translator.get_asset_key(parent_resource_props),
                         column_name=parent_column_name,
                     )
                 )
 
-            deps_by_column[column_name.lower()] = column_deps
+            deps_by_column[column_name.lower()] = list(column_deps)
 
         # 4. Render the lineage as metadata.
         with disable_dagster_warnings():
@@ -937,9 +963,9 @@ class DbtCliResource(ConfigurableResource):
         state_dir: Optional[str] = None,
     ):
         if isinstance(project_dir, DbtProject):
-            populated_state_dir = project_dir.get_state_dir_if_populated()
-            if state_dir is None and populated_state_dir:
-                state_dir = os.fspath(populated_state_dir)
+            if not state_dir and project_dir.state_dir:
+                state_dir = os.fspath(project_dir.state_dir)
+
             project_dir = os.fspath(project_dir.project_dir)
 
         # static typing doesn't understand whats going on here, thinks these fields dont exist
@@ -1044,17 +1070,7 @@ class DbtCliResource(ConfigurableResource):
         if state_dir is None:
             return None
 
-        resolved_state_dir = cls._validate_absolute_path_exists(state_dir)
-        cls._validate_path_contains_file(
-            path=resolved_state_dir,
-            file_name="manifest.json",
-            error_message=(
-                f"{resolved_state_dir} does not contain a manifest.json file. Please"
-                " specify a valid path to a dbt state directory."
-            ),
-        )
-
-        return os.fspath(resolved_state_dir)
+        return os.fspath(Path(state_dir).absolute().resolve())
 
     def _get_unique_target_path(self, *, context: Optional[OpExecutionContext]) -> Path:
         """Get a unique target path for the dbt CLI invocation.
@@ -1092,19 +1108,21 @@ class DbtCliResource(ConfigurableResource):
         return adapter
 
     def get_defer_args(self) -> Sequence[str]:
-        """Returns ('--defer', '--defer-state', state_artifacts_dir) if state_dir was
-        specified and contains a manifest.json, () otherwise.
+        """Build the defer arguments for the dbt CLI command, using the supplied state directory.
+        If no state directory is supplied, or the state directory does not have a manifest for.
+        comparison, an empty list of arguments is returned.
+
+        Returns:
+            Sequence[str]: The defer arguements for the dbt CLI command.
         """
+        if not (self.state_dir and Path(self.state_dir).joinpath("manifest.json").exists()):
+            return []
+
+        state_flag = "--defer-state"
         if version.parse(dbt_version) < version.parse("1.6.0"):
             state_flag = "--state"
-        else:
-            # Use the more scoped --defer-state on versions it is available
-            state_flag = "--defer-state"
 
-        if self.state_dir and Path(self.state_dir).joinpath("manifest.json").exists():
-            return ("--defer", state_flag, self.state_dir)
-        else:
-            return ()
+        return ["--defer", state_flag, self.state_dir]
 
     @public
     def cli(

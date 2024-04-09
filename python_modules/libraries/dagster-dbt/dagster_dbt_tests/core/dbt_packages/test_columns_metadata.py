@@ -296,6 +296,18 @@ def test_column_lineage(
                 ],
             }
         ),
+        AssetKey(["duplicate_column_dep_orders"]): TableColumnLineage(
+            deps_by_column={
+                "amount_2x": [TableColumnDep(asset_key=AssetKey(["orders"]), column_name="amount")],
+            }
+        ),
+        AssetKey(["incremental_orders"]): TableColumnLineage(
+            deps_by_column={
+                "order_id": [
+                    TableColumnDep(asset_key=AssetKey(["orders"]), column_name="order_id")
+                ],
+            }
+        ),
         AssetKey(["customers"]): TableColumnLineage(
             deps_by_column={
                 "customer_id": [
@@ -355,6 +367,11 @@ def test_column_lineage(
         AssetKey(["count_star_customers"]): TableColumnLineage(
             deps_by_column={
                 "count_star": [],
+            }
+        ),
+        AssetKey(["count_star_implicit_alias_customers"]): TableColumnLineage(
+            deps_by_column={
+                "count_star()": [],
             }
         ),
     }
