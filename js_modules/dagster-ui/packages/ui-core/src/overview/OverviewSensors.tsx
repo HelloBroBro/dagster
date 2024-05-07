@@ -5,7 +5,6 @@ import {useContext, useMemo} from 'react';
 import {BASIC_INSTIGATION_STATE_FRAGMENT} from './BasicInstigationStateFragment';
 import {OverviewSensorTable} from './OverviewSensorsTable';
 import {sortRepoBuckets} from './sortRepoBuckets';
-import {BasicInstigationStateFragment} from './types/BasicInstigationStateFragment.types';
 import {OverviewSensorsQuery, OverviewSensorsQueryVariables} from './types/OverviewSensors.types';
 import {visibleRepoKeys} from './visibleRepoKeys';
 import {PYTHON_ERROR_FRAGMENT} from '../app/PythonErrorFragment';
@@ -19,6 +18,7 @@ import {useQueryPersistedState} from '../hooks/useQueryPersistedState';
 import {useSelectionReducer} from '../hooks/useSelectionReducer';
 import {INSTANCE_HEALTH_FRAGMENT} from '../instance/InstanceHealthFragment';
 import {filterPermissionedInstigationState} from '../instigation/filterPermissionedInstigationState';
+import {useBlockTraceOnQueryResult} from '../performance/TraceContext';
 import {SensorBulkActionMenu} from '../sensors/SensorBulkActionMenu';
 import {SensorInfo} from '../sensors/SensorInfo';
 import {makeSensorKey} from '../sensors/makeSensorKey';
@@ -32,7 +32,7 @@ import {SENSOR_TYPE_META} from '../workspace/VirtualizedSensorRow';
 import {WorkspaceContext} from '../workspace/WorkspaceContext';
 import {buildRepoAddress} from '../workspace/buildRepoAddress';
 import {repoAddressAsHumanString} from '../workspace/repoAddressAsString';
-import {RepoAddress} from '../workspace/types';
+import {RootWorkspaceQuery} from '../workspace/types/WorkspaceContext.types';
 
 function toSetFilterValue(type: SensorType) {
   const label = SENSOR_TYPE_META[type].name;
@@ -54,7 +54,13 @@ const SENSOR_TYPE_TO_FILTER: Partial<Record<SensorType, ReturnType<typeof toSetF
 const ALL_SENSOR_TYPE_FILTERS = Object.values(SENSOR_TYPE_TO_FILTER);
 
 export const OverviewSensors = () => {
-  const {allRepos, visibleRepos, loading: workspaceLoading} = useContext(WorkspaceContext);
+  const {
+    allRepos,
+    visibleRepos,
+    loading: workspaceLoading,
+    data: cachedData,
+  } = useContext(WorkspaceContext);
+
   const repoCount = allRepos.length;
   const [searchValue, setSearchValue] = useQueryPersistedState<string>({
     queryKey: 'search',
@@ -96,7 +102,14 @@ export const OverviewSensors = () => {
       notifyOnNetworkStatusChange: true,
     },
   );
-  const {data, loading} = queryResultOverview;
+  const {data: currentData, loading} = queryResultOverview;
+  const data =
+    currentData ??
+    (cachedData?.workspaceOrError.__typename === 'Workspace'
+      ? (cachedData as Extract<typeof cachedData, {workspaceOrError: {__typename: 'Workspace'}}>)
+      : null);
+
+  useBlockTraceOnQueryResult(queryResultOverview, 'OverviewSensorsQuery');
 
   const refreshState = useQueryRefreshAtInterval(queryResultOverview, FIFTEEN_SECONDS);
 
@@ -326,7 +339,7 @@ export const OverviewSensors = () => {
       ) : (
         <>
           <SensorInfo
-            daemonHealth={data?.instance.daemonHealth}
+            daemonHealth={currentData?.instance.daemonHealth}
             padding={{vertical: 16, horizontal: 24}}
             border="top"
           />
@@ -337,12 +350,7 @@ export const OverviewSensors = () => {
   );
 };
 
-type RepoBucket = {
-  repoAddress: RepoAddress;
-  sensors: {name: string; sensorType: SensorType; sensorState: BasicInstigationStateFragment}[];
-};
-
-const buildBuckets = (data?: OverviewSensorsQuery): RepoBucket[] => {
+const buildBuckets = (data?: null | OverviewSensorsQuery | RootWorkspaceQuery) => {
   if (data?.workspaceOrError.__typename !== 'Workspace') {
     return [];
   }

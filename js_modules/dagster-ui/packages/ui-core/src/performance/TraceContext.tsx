@@ -53,16 +53,19 @@ export class Dependency {
 }
 
 /** Use this to declare a dependency on an apollo query result */
-export function useBlockTraceOnQueryResult(queryResult: QueryResult<any, any>, name: string) {
+export function useBlockTraceOnQueryResult(
+  queryResult: Pick<QueryResult<any, any>, 'data' | 'error'>,
+  name: string,
+) {
   const dep = useTraceDependency(name);
   const hasData = !!queryResult.data;
   const hasError = !!queryResult.error;
 
   useDangerousRenderEffect(() => {
-    if (hasData) {
+    if (hasData && !hasError) {
       dep.completeDependency(CompletionType.SUCCESS);
     }
-  }, [dep, hasData]);
+  }, [dep, hasData, hasError]);
 
   useDangerousRenderEffect(() => {
     if (!hasData && hasError) {
