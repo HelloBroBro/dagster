@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, cast
 
 import pytest
 from dagster import (
@@ -488,6 +488,10 @@ def test_asset_checks_results(
                 "invocation_id"
             ]
 
+        for event in events:
+            if isinstance(event, AssetCheckResult):
+                assert cast(int, event.metadata["Execution Duration"].value) > 0
+
         expected_results = [
             AssetCheckResult(
                 passed=True,
@@ -499,6 +503,7 @@ def test_asset_checks_results(
                     ),
                     "invocation_id": invocation_id,
                     "status": "pass",
+                    "dagster_dbt/failed_row_count": 0,
                 },
             ),
             AssetCheckResult(
@@ -511,6 +516,7 @@ def test_asset_checks_results(
                     ),
                     "invocation_id": invocation_id,
                     "status": "pass",
+                    "dagster_dbt/failed_row_count": 0,
                 },
             ),
             AssetCheckResult(
@@ -524,6 +530,7 @@ def test_asset_checks_results(
                     ),
                     "invocation_id": invocation_id,
                     "status": "warn",
+                    "dagster_dbt/failed_row_count": 1,
                 },
             ),
             AssetCheckResult(
@@ -537,12 +544,33 @@ def test_asset_checks_results(
                     ),
                     "invocation_id": invocation_id,
                     "status": "fail",
+                    "dagster_dbt/failed_row_count": 4,
                 },
             ),
         ]
 
+        # filter these out for comparison
+        non_deterministic_metadata_keys = ["Execution Duration"]
+        check_events_without_non_deterministic_metadata = {}
+        for event in events:
+            if isinstance(event, AssetCheckResult):
+                check_events_without_non_deterministic_metadata[
+                    event.asset_key, event.check_name
+                ] = event._replace(
+                    metadata={
+                        k: v
+                        for k, v in event.metadata.items()
+                        if k not in non_deterministic_metadata_keys
+                    }
+                )
+
         for expected_asset_check_result in expected_results:
-            assert expected_asset_check_result in events
+            assert (
+                check_events_without_non_deterministic_metadata[
+                    expected_asset_check_result.asset_key, expected_asset_check_result.check_name
+                ]
+                == expected_asset_check_result
+            )
 
         yield from events
 
