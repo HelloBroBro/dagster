@@ -32,7 +32,7 @@ import {SENSOR_TYPE_META} from '../workspace/VirtualizedSensorRow';
 import {WorkspaceContext} from '../workspace/WorkspaceContext';
 import {buildRepoAddress} from '../workspace/buildRepoAddress';
 import {repoAddressAsHumanString} from '../workspace/repoAddressAsString';
-import {RootWorkspaceQuery} from '../workspace/types/WorkspaceContext.types';
+import {WorkspaceLocationNodeFragment} from '../workspace/types/WorkspaceQueries.types';
 
 function toSetFilterValue(type: SensorType) {
   const label = SENSOR_TYPE_META[type].name;
@@ -103,23 +103,27 @@ export const OverviewSensors = () => {
       notifyOnNetworkStatusChange: true,
     },
   );
-  const {data: currentData, loading} = queryResultOverview;
-  const data =
-    currentData ??
-    (cachedData?.workspaceOrError.__typename === 'Workspace'
-      ? (cachedData as Extract<typeof cachedData, {workspaceOrError: {__typename: 'Workspace'}}>)
-      : null);
+  const {data, loading} = queryResultOverview;
 
   useBlockTraceOnQueryResult(queryResultOverview, 'OverviewSensorsQuery');
 
   const refreshState = useQueryRefreshAtInterval(queryResultOverview, FIFTEEN_SECONDS);
 
   const repoBuckets = useMemo(() => {
+    const cachedEntries = Object.values(cachedData).filter(
+      (location): location is Extract<typeof location, {__typename: 'WorkspaceLocationEntry'}> =>
+        location.__typename === 'WorkspaceLocationEntry',
+    );
+    const workspaceOrError = data?.workspaceOrError;
+    const entries =
+      workspaceOrError?.__typename === 'Workspace'
+        ? workspaceOrError.locationEntries
+        : cachedEntries;
     const visibleKeys = visibleRepoKeys(visibleRepos);
-    return buildBuckets(data).filter(({repoAddress}) =>
+    return buildBuckets(entries).filter(({repoAddress}) =>
       visibleKeys.has(repoAddressAsHumanString(repoAddress)),
     );
-  }, [data, visibleRepos]);
+  }, [data, cachedData, visibleRepos]);
 
   const {state: runningState} = runningStateFilter;
 
@@ -340,7 +344,7 @@ export const OverviewSensors = () => {
       ) : (
         <>
           <SensorInfo
-            daemonHealth={currentData?.instance.daemonHealth}
+            daemonHealth={data?.instance.daemonHealth}
             padding={{vertical: 16, horizontal: 24}}
             border="top"
           />
@@ -351,12 +355,15 @@ export const OverviewSensors = () => {
   );
 };
 
-const buildBuckets = (data?: null | OverviewSensorsQuery | RootWorkspaceQuery) => {
-  if (data?.workspaceOrError.__typename !== 'Workspace') {
-    return [];
-  }
-
-  const entries = data.workspaceOrError.locationEntries.map((entry) => entry.locationOrLoadError);
+const buildBuckets = (
+  locationEntries:
+    | Extract<
+        OverviewSensorsQuery['workspaceOrError'],
+        {__typename: 'Workspace'}
+      >['locationEntries']
+    | Extract<WorkspaceLocationNodeFragment, {__typename: 'WorkspaceLocationEntry'}>[],
+) => {
+  const entries = locationEntries.map((entry) => entry.locationOrLoadError);
 
   const buckets = [];
 
