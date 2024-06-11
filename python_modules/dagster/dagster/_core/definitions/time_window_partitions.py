@@ -61,22 +61,16 @@ from .partition_key_range import PartitionKeyRange
 from .timestamp import TimestampWithTimezone
 
 
-def is_second_ambiguous_time(dt: datetime, tz: Optional[str]):
+def is_second_ambiguous_time(dt: datetime, tz: str):
     """Returns if a datetime is the second instance of an ambiguous time in the given timezone due
-    to DST transitions.
+    to DST transitions. Assumes that dt is alraedy in the specified timezone.
     """
     # UTC is never ambiguous
-    if tz is not None and tz.upper() == "UTC":
+    if tz.upper() == "UTC":
         return False
 
     # Ensure that the datetime is in the correct timezone
     tzinfo = check.not_none(dt.tzinfo)
-
-    # pendulum has the non-standard "name" attribute on it's tzinfo, check for it
-    # otherwise there is no standard way of getting the IANA timezone name from datetime/tzinfo
-    if tz is not None and getattr(tzinfo, "name", None) != tz:
-        dt = to_timezone(dt, tz)
-        tzinfo = check.not_none(dt.tzinfo)
 
     # Only interested in the second instance of an ambiguous time
     if dt.fold == 0:
@@ -102,11 +96,11 @@ def dst_safe_fmt(fmt: str) -> str:
     return fmt + "%z"
 
 
-def dst_safe_strftime(dt: datetime, tz: Optional[str], fmt: str, cron_schedule: str) -> str:
+def dst_safe_strftime(dt: datetime, tz: str, fmt: str, cron_schedule: str) -> str:
     """A method for converting a datetime to a string which will append a suffix in cases where
     the resulting timestamp would be ambiguous due to DST transitions.
 
-    tz is Optional. None means use the timezone on the datetime object
+    Assumes that dt is already in the specified timezone.
     """
     # if the format already includes a UTC offset, then we don't need to do anything
     if "%z" in fmt:
@@ -183,21 +177,13 @@ class PersistedTimeWindow(
 
     def __new__(
         cls,
-        start: Union[TimestampWithTimezone, PendulumDateTime],
-        end: Union[TimestampWithTimezone, PendulumDateTime],
+        start: TimestampWithTimezone,
+        end: TimestampWithTimezone,
     ):
         return super(cls, PersistedTimeWindow).__new__(
             cls,
-            start=(
-                start
-                if isinstance(start, TimestampWithTimezone)
-                else TimestampWithTimezone.from_pendulum_time(start)
-            ),
-            end=(
-                end
-                if isinstance(end, TimestampWithTimezone)
-                else TimestampWithTimezone.from_pendulum_time(end)
-            ),
+            start=check.inst_param(start, "start", TimestampWithTimezone),
+            end=check.inst_param(end, "end", TimestampWithTimezone),
         )
 
     @cached_property
@@ -215,8 +201,11 @@ class PersistedTimeWindow(
         )
 
     @staticmethod
-    def from_public_time_window(tw: TimeWindow):
-        return PersistedTimeWindow(tw.start, tw.end)
+    def from_public_time_window(tw: TimeWindow, timezone: str):
+        return PersistedTimeWindow(
+            TimestampWithTimezone(tw.start.timestamp(), timezone),
+            TimestampWithTimezone(tw.end.timestamp(), timezone),
+        )
 
     def subtract(self, other: "PersistedTimeWindow") -> Sequence["PersistedTimeWindow"]:
         other_start_timestamp = other.start.timestamp()
@@ -233,11 +222,13 @@ class PersistedTimeWindow(
 
         if other_start_timestamp > start_timestamp:
             windows.append(
-                PersistedTimeWindow(start=self.start, end=other.start),
+                PersistedTimeWindow(start=self._asdict()["start"], end=other._asdict()["start"]),
             )
 
         if other_end_timestamp < end_timestamp:
-            windows.append(PersistedTimeWindow(start=other.end, end=self.end))
+            windows.append(
+                PersistedTimeWindow(start=other._asdict()["end"], end=self._asdict()["end"])
+            )
 
         return windows
 
@@ -451,9 +442,10 @@ class TimeWindowPartitionsDefinition(
                 or partitions_past_current_time < self.end_offset
             ):
                 if idx >= start_idx and idx < end_idx:
-                    # datetimes from _iterate_time_windows have the correct tz so use None as a optimization
                     partition_keys.append(
-                        dst_safe_strftime(time_window.start, None, self.fmt, self.cron_schedule)
+                        dst_safe_strftime(
+                            time_window.start, self.timezone, self.fmt, self.cron_schedule
+                        )
                     )
                 if time_window.end.timestamp() > current_timestamp:
                     partitions_past_current_time += 1
@@ -483,9 +475,10 @@ class TimeWindowPartitionsDefinition(
                 time_window.end.timestamp() <= current_timestamp
                 or partitions_past_current_time < self.end_offset
             ):
-                # datetimes from _iterate_time_windows have the correct tz so use None as a optimization
                 partition_keys.append(
-                    dst_safe_strftime(time_window.start, None, self.fmt, self.cron_schedule)
+                    dst_safe_strftime(
+                        time_window.start, self.timezone, self.fmt, self.cron_schedule
+                    )
                 )
 
                 if time_window.end.timestamp() > current_timestamp:
@@ -556,7 +549,7 @@ class TimeWindowPartitionsDefinition(
         for partition_key in sorted_pks:
             next_window = next(cur_windows_iterator)
             if (
-                dst_safe_strftime(next_window.start, None, self.fmt, self.cron_schedule)
+                dst_safe_strftime(next_window.start, self.timezone, self.fmt, self.cron_schedule)
                 == partition_key
             ):
                 partition_key_time_windows.append(next_window)
@@ -612,7 +605,7 @@ class TimeWindowPartitionsDefinition(
         if start_time.timestamp() >= last_partition_window.end.timestamp():
             return None
         else:
-            return dst_safe_strftime(start_time, None, self.fmt, self.cron_schedule)
+            return dst_safe_strftime(start_time, self.timezone, self.fmt, self.cron_schedule)
 
     def get_next_partition_window(
         self, end_dt: datetime, current_time: Optional[datetime] = None, respect_bounds: bool = True
@@ -1693,12 +1686,19 @@ class BaseTimeWindowPartitionsSubset(PartitionsSubset):
         first_tw_start_timestamp = first_tw.start.timestamp()
 
         if len(self.included_time_windows) == 0:
-            return [PersistedTimeWindow(first_tw.start, last_tw.end)]
+            return [
+                PersistedTimeWindow.from_public_time_window(
+                    TimeWindow(first_tw.start, last_tw.end), self.partitions_def.timezone
+                )
+            ]
 
         time_windows = []
         if first_tw_start_timestamp < self.included_time_windows[0].start.timestamp():
             time_windows.append(
-                PersistedTimeWindow(first_tw.start, self.included_time_windows[0].start)
+                PersistedTimeWindow.from_public_time_window(
+                    TimeWindow(first_tw.start, self.included_time_windows[0].start),
+                    self.partitions_def.timezone,
+                )
             )
 
         for i in range(len(self.included_time_windows) - 1):
@@ -1707,22 +1707,31 @@ class BaseTimeWindowPartitionsSubset(PartitionsSubset):
             if self.included_time_windows[i].end.timestamp() < last_tw_end_timestamp:
                 if self.included_time_windows[i + 1].start.timestamp() <= last_tw_end_timestamp:
                     time_windows.append(
-                        PersistedTimeWindow(
-                            self.included_time_windows[i].end,
-                            self.included_time_windows[i + 1].start,
+                        PersistedTimeWindow.from_public_time_window(
+                            TimeWindow(
+                                self.included_time_windows[i].end,
+                                self.included_time_windows[i + 1].start,
+                            ),
+                            self.partitions_def.timezone,
                         )
                     )
                 else:
                     time_windows.append(
-                        PersistedTimeWindow(
-                            self.included_time_windows[i].end,
-                            last_tw.end,
+                        PersistedTimeWindow.from_public_time_window(
+                            TimeWindow(
+                                self.included_time_windows[i].end,
+                                last_tw.end,
+                            ),
+                            self.partitions_def.timezone,
                         )
                     )
 
         if last_tw_end_timestamp > self.included_time_windows[-1].end.timestamp():
             time_windows.append(
-                PersistedTimeWindow(self.included_time_windows[-1].end, last_tw.end)
+                PersistedTimeWindow.from_public_time_window(
+                    TimeWindow(self.included_time_windows[-1].end, last_tw.end),
+                    self.partitions_def.timezone,
+                )
             )
 
         return time_windows
@@ -1803,32 +1812,50 @@ class BaseTimeWindowPartitionsSubset(PartitionsSubset):
                     )
 
                     if merge_with_range and merge_with_later_range:
-                        result_windows[i] = PersistedTimeWindow(
-                            included_window.start, result_windows[i + 1].end
+                        result_windows[i] = PersistedTimeWindow.from_public_time_window(
+                            TimeWindow(included_window.start, result_windows[i + 1].end),
+                            self.partitions_def.timezone,
                         )
                         del result_windows[i + 1]
                     elif merge_with_range:
-                        result_windows[i] = PersistedTimeWindow(included_window.start, window.end)
+                        result_windows[i] = PersistedTimeWindow.from_public_time_window(
+                            TimeWindow(included_window.start, window.end),
+                            self.partitions_def.timezone,
+                        )
                     elif merge_with_later_range:
-                        result_windows[i + 1] = PersistedTimeWindow(
-                            window.start, result_windows[i + 1].end
+                        result_windows[i + 1] = PersistedTimeWindow.from_public_time_window(
+                            TimeWindow(window.start, result_windows[i + 1].end),
+                            self.partitions_def.timezone,
                         )
                     else:
                         result_windows.insert(
-                            i + 1, PersistedTimeWindow.from_public_time_window(window)
+                            i + 1,
+                            PersistedTimeWindow.from_public_time_window(
+                                window, self.partitions_def.timezone
+                            ),
                         )
 
                     num_added_partitions += 1
                     break
             else:
                 if result_windows and window_start_timestamp == result_windows[0].start.timestamp():
-                    result_windows[0] = PersistedTimeWindow(window.start, included_window.end)
+                    result_windows[0] = PersistedTimeWindow.from_public_time_window(
+                        TimeWindow(window.start, included_window.end), self.partitions_def.timezone
+                    )
                 elif (
                     result_windows and window.end.timestamp() == result_windows[0].start.timestamp()
                 ):
-                    result_windows[0] = PersistedTimeWindow(window.start, included_window.end)
+                    result_windows[0] = PersistedTimeWindow.from_public_time_window(
+                        TimeWindow(window.start, included_window.end), self.partitions_def.timezone
+                    )
                 else:
-                    result_windows.insert(0, PersistedTimeWindow.from_public_time_window(window))
+                    result_windows.insert(
+                        0,
+                        PersistedTimeWindow.from_public_time_window(
+                            window,
+                            self.partitions_def.timezone,
+                        ),
+                    )
 
                 num_added_partitions += 1
 
@@ -1861,8 +1888,8 @@ class BaseTimeWindowPartitionsSubset(PartitionsSubset):
         def tuples_to_time_windows(tuples):
             return [
                 PersistedTimeWindow(
-                    pendulum.from_timestamp(tup[0], tz=partitions_def.timezone),
-                    pendulum.from_timestamp(tup[1], tz=partitions_def.timezone),
+                    TimestampWithTimezone(tup[0], partitions_def.timezone),
+                    TimestampWithTimezone(tup[1], partitions_def.timezone),
                 )
                 for tup in tuples
             ]
@@ -2164,7 +2191,9 @@ class TimeWindowPartitionsSubset(
         included_time_windows: Sequence[Union[PersistedTimeWindow, TimeWindow]],
     ):
         included_time_windows = [
-            PersistedTimeWindow.from_public_time_window(tw) if isinstance(tw, TimeWindow) else tw
+            PersistedTimeWindow.from_public_time_window(tw, partitions_def.timezone)
+            if isinstance(tw, TimeWindow)
+            else tw
             for tw in included_time_windows
         ]
 
@@ -2190,7 +2219,11 @@ class TimeWindowPartitionsSubset(
         last_window = partitions_def.get_last_partition_window(subset.current_time)
         return TimeWindowPartitionsSubset(
             partitions_def=partitions_def,
-            included_time_windows=[PersistedTimeWindow(first_window.start, last_window.end)]
+            included_time_windows=[
+                PersistedTimeWindow.from_public_time_window(
+                    TimeWindow(first_window.start, last_window.end), partitions_def.timezone
+                )
+            ]
             if first_window and last_window
             else [],
             num_partitions=None,
@@ -2316,7 +2349,11 @@ class TimeWindowPartitionsSubset(
 
             # these windows intersect
             if start.timestamp() < end.timestamp():
-                result_windows.append(PersistedTimeWindow(start=start, end=end))
+                result_windows.append(
+                    PersistedTimeWindow.from_public_time_window(
+                        TimeWindow(start=start, end=end), self.partitions_def.timezone
+                    )
+                )
 
             # advance the iterator with the earliest end time to find the next potential intersection
             if self_window.end.timestamp() < other_window.end.timestamp():
@@ -2344,8 +2381,9 @@ class TimeWindowPartitionsSubset(
             latest_window = result_windows[-1]
             if window.start.timestamp() <= latest_window.end.timestamp():
                 # merge this window with the latest window
-                result_windows[-1] = PersistedTimeWindow(
-                    latest_window.start, max(latest_window.end, window.end)
+                result_windows[-1] = PersistedTimeWindow.from_public_time_window(
+                    TimeWindow(latest_window.start, max(latest_window.end, window.end)),
+                    self.partitions_def.timezone,
                 )
             else:
                 result_windows.append(window)
