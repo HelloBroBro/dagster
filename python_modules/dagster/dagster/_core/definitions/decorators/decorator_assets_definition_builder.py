@@ -207,28 +207,32 @@ def compute_required_resource_keys(
 
 
 class DecoratorAssetsDefinitionBuilderArgs(NamedTuple):
-    name: Optional[str]
-    description: Optional[str]
-    specs: Sequence[AssetSpec]
-    check_specs: Sequence[AssetCheckSpec]
-    asset_out_map: Mapping[str, AssetOut]
-    upstream_asset_deps: Optional[Iterable[AssetDep]]
     asset_deps: Mapping[str, Set[AssetKey]]
     asset_in_map: Mapping[str, AssetIn]
-    can_subset: bool
-    group_name: Optional[str]
-    partitions_def: Optional[PartitionsDefinition]
-    retry_policy: Optional[RetryPolicy]
-    code_version: Optional[str]
-    op_tags: Optional[Mapping[str, Any]]
-    config_schema: Optional[UserConfigSchema]
-    retry_policy: Optional[RetryPolicy]
-    compute_kind: Optional[str]
-    required_resource_keys: AbstractSet[str]
+    asset_out_map: Mapping[str, AssetOut]
     assets_def_resource_defs: Mapping[str, ResourceDefinition]
-    op_def_resource_defs: Mapping[str, ResourceDefinition]
     backfill_policy: Optional[BackfillPolicy]
+    can_subset: bool
+    check_specs_by_output_name: Mapping[str, AssetCheckSpec]
+    code_version: Optional[str]
+    compute_kind: Optional[str]
+    config_schema: Optional[UserConfigSchema]
     decorator_name: str
+    group_name: Optional[str]
+    name: Optional[str]
+    op_def_resource_defs: Mapping[str, ResourceDefinition]
+    op_description: Optional[str]
+    op_tags: Optional[Mapping[str, Any]]
+    partitions_def: Optional[PartitionsDefinition]
+    required_resource_keys: AbstractSet[str]
+    retry_policy: Optional[RetryPolicy]
+    retry_policy: Optional[RetryPolicy]
+    specs: Sequence[AssetSpec]
+    upstream_asset_deps: Optional[Iterable[AssetDep]]
+
+    @property
+    def check_specs(self) -> Sequence[AssetCheckSpec]:
+        return list(self.check_specs_by_output_name.values())
 
 
 class DecoratorAssetsDefinitionBuilder:
@@ -264,7 +268,7 @@ class DecoratorAssetsDefinitionBuilder:
         )
 
     @staticmethod
-    def from_args(
+    def for_multi_asset(
         *, fn: Callable[..., Any], args: DecoratorAssetsDefinitionBuilderArgs
     ) -> "DecoratorAssetsDefinitionBuilder":
         op_name = args.name or fn.__name__
@@ -286,27 +290,45 @@ class DecoratorAssetsDefinitionBuilder:
                     "Can not pass internal_asset_deps and specs to @multi_asset, specify deps on"
                     " the AssetSpecs directly."
                 )
-            return DecoratorAssetsDefinitionBuilder.from_specs(fn=fn, op_name=op_name, args=args)
+            return DecoratorAssetsDefinitionBuilder.from_multi_asset_specs(
+                fn=fn,
+                op_name=op_name,
+                passed_args=args,
+                asset_specs=args.specs,
+                can_subset=args.can_subset,
+                asset_in_map=args.asset_in_map,
+            )
 
-        return DecoratorAssetsDefinitionBuilder.from_asset_outs(fn=fn, op_name=op_name, args=args)
+        return DecoratorAssetsDefinitionBuilder.from_asset_outs_in_asset_centric_decorator(
+            fn=fn,
+            op_name=op_name,
+            asset_in_map=args.asset_in_map,
+            asset_out_map=args.asset_out_map,
+            asset_deps=args.asset_deps,
+            upstream_asset_deps=args.upstream_asset_deps,
+            passed_args=args,
+        )
 
     @staticmethod
-    def from_specs(
+    def from_multi_asset_specs(
         *,
         fn: Callable[..., Any],
         op_name: str,
-        args: DecoratorAssetsDefinitionBuilderArgs,
+        asset_specs: Sequence[AssetSpec],
+        can_subset: bool,
+        asset_in_map: Mapping[str, AssetIn],
+        passed_args: DecoratorAssetsDefinitionBuilderArgs,
     ) -> "DecoratorAssetsDefinitionBuilder":
-        check.param_invariant(args.specs, "args", "Must use specs in this codepath")
+        check.param_invariant(passed_args.specs, "passed_args", "Must use specs in this codepath")
 
         named_outs_by_asset_key: Mapping[AssetKey, NamedOut] = {}
-        for asset_spec in args.specs:
+        for asset_spec in asset_specs:
             output_name = asset_spec.key.to_python_identifier()
             named_outs_by_asset_key[asset_spec.key] = NamedOut(
                 output_name,
                 Out(
                     Nothing,
-                    is_required=not (args.can_subset or asset_spec.skippable),
+                    is_required=not (can_subset or asset_spec.skippable),
                     description=asset_spec.description,
                     code_version=asset_spec.code_version,
                     metadata=asset_spec.metadata,
@@ -314,7 +336,7 @@ class DecoratorAssetsDefinitionBuilder:
             )
 
         upstream_keys = set()
-        for spec in args.specs:
+        for spec in asset_specs:
             for dep in spec.deps:
                 if dep.asset_key not in named_outs_by_asset_key:
                     upstream_keys.add(dep.asset_key)
@@ -322,9 +344,8 @@ class DecoratorAssetsDefinitionBuilder:
                     # self-dependent asset also needs to be considered an upstream_key
                     upstream_keys.add(dep.asset_key)
 
-        explicit_ins = args.asset_in_map
         # get which asset keys have inputs set
-        loaded_upstreams = build_named_ins(fn, explicit_ins, deps=set())
+        loaded_upstreams = build_named_ins(fn, asset_in_map, deps=set())
         unexpected_upstreams = {key for key in loaded_upstreams.keys() if key not in upstream_keys}
         if unexpected_upstreams:
             raise DagsterInvalidDefinitionError(
@@ -332,44 +353,47 @@ class DecoratorAssetsDefinitionBuilder:
                 " AssetSpec(s). Set the deps on the appropriate AssetSpec(s)."
             )
         remaining_upstream_keys = {key for key in upstream_keys if key not in loaded_upstreams}
-        named_ins_by_asset_key = build_named_ins(fn, explicit_ins, deps=remaining_upstream_keys)
+        named_ins_by_asset_key = build_named_ins(fn, asset_in_map, deps=remaining_upstream_keys)
 
         internal_deps = {
             spec.key: {dep.asset_key for dep in spec.deps}
-            for spec in args.specs
+            for spec in asset_specs
             if spec.deps is not None
         }
+
+        _validate_check_specs_target_relevant_asset_keys(
+            passed_args.check_specs, [spec.key for spec in asset_specs]
+        )
 
         return DecoratorAssetsDefinitionBuilder(
             named_ins_by_asset_key=named_ins_by_asset_key,
             named_outs_by_asset_key=named_outs_by_asset_key,
             internal_deps=internal_deps,
             op_name=op_name,
-            args=args,
+            args=passed_args,
             fn=fn,
         )
 
     @staticmethod
-    def from_asset_outs(
+    def from_asset_outs_in_asset_centric_decorator(
         *,
         fn: Callable[..., Any],
         op_name: str,
-        args: DecoratorAssetsDefinitionBuilderArgs,
+        asset_in_map: Mapping[str, AssetIn],
+        asset_out_map: Mapping[str, AssetOut],
+        asset_deps: Mapping[str, Set[AssetKey]],
+        upstream_asset_deps: Optional[Iterable[AssetDep]],
+        passed_args: DecoratorAssetsDefinitionBuilderArgs,
     ):
-        check.param_invariant(not args.specs, "args", "This codepath for non-spec based create")
-        asset_out_map = args.asset_out_map
+        check.param_invariant(
+            not passed_args.specs, "args", "This codepath for non-spec based create"
+        )
         named_ins_by_asset_key = build_named_ins(
             fn,
-            args.asset_in_map,
-            deps=(
-                {dep.asset_key for dep in args.upstream_asset_deps}
-                if args.upstream_asset_deps
-                else set()
-            ),
+            asset_in_map,
+            deps=({dep.asset_key for dep in upstream_asset_deps} if upstream_asset_deps else set()),
         )
         named_outs_by_asset_key = build_named_outs(asset_out_map)
-
-        asset_deps = args.asset_deps
 
         # validate that the asset_ins are a subset of the upstream asset_deps.
         upstream_internal_asset_keys = set().union(*asset_deps.values())
@@ -404,12 +428,16 @@ class DecoratorAssetsDefinitionBuilder:
         keys_by_output_name = make_keys_by_output_name(named_outs_by_asset_key)
         internal_deps = {keys_by_output_name[name]: asset_deps[name] for name in asset_deps}
 
+        _validate_check_specs_target_relevant_asset_keys(
+            passed_args.check_specs, list(named_outs_by_asset_key.keys())
+        )
+
         return DecoratorAssetsDefinitionBuilder(
             named_ins_by_asset_key=named_ins_by_asset_key,
             named_outs_by_asset_key=named_outs_by_asset_key,
             internal_deps=internal_deps,
             op_name=op_name,
-            args=args,
+            args=passed_args,
             fn=fn,
         )
 
@@ -441,9 +469,7 @@ class DecoratorAssetsDefinitionBuilder:
 
     @cached_property
     def check_specs_by_output_name(self) -> Mapping[str, AssetCheckSpec]:
-        return validate_and_assign_output_names_to_check_specs(
-            self.args.check_specs, list(self.asset_keys)
-        )
+        return self.args.check_specs_by_output_name
 
     @cached_property
     def check_outs_by_output_name(self) -> Mapping[str, Out]:
@@ -491,18 +517,22 @@ class DecoratorAssetsDefinitionBuilder:
             asset_name=self.op_name,
         )
 
-    def _create_op_definition(self) -> OpDefinition:
+    @cached_property
+    def required_resource_keys(self) -> AbstractSet[str]:
+        return compute_required_resource_keys(
+            required_resource_keys=self.args.required_resource_keys,
+            resource_defs=self.args.op_def_resource_defs,
+            fn=self.fn,
+            decorator_name=self.args.decorator_name,
+        )
+
+    def create_op_definition(self) -> OpDefinition:
         return _Op(
             name=self.op_name,
-            description=self.args.description,
+            description=self.args.op_description,
             ins=self.ins_by_input_names,
             out=self.combined_outs_by_output_name,
-            required_resource_keys=compute_required_resource_keys(
-                required_resource_keys=self.args.required_resource_keys,
-                resource_defs=self.args.op_def_resource_defs,
-                fn=self.fn,
-                decorator_name=self.args.decorator_name,
-            ),
+            required_resource_keys=self.required_resource_keys,
             tags={
                 **({COMPUTE_KIND_TAG: self.args.compute_kind} if self.args.compute_kind else {}),
                 **(self.args.op_tags or {}),
@@ -516,7 +546,7 @@ class DecoratorAssetsDefinitionBuilder:
         return AssetsDefinition.dagster_internal_init(
             keys_by_input_name=self.asset_keys_by_input_names,
             keys_by_output_name=self.asset_keys_by_output_name,
-            node_def=self._create_op_definition(),
+            node_def=self.create_op_definition(),
             partitions_def=self.args.partitions_def,
             can_subset=self.args.can_subset,
             resource_defs=self.args.assets_def_resource_defs,
@@ -576,13 +606,16 @@ def validate_and_assign_output_names_to_check_specs(
     check_specs: Optional[Sequence[AssetCheckSpec]], valid_asset_keys: Sequence[AssetKey]
 ) -> Mapping[str, AssetCheckSpec]:
     _validate_check_specs_target_relevant_asset_keys(check_specs, valid_asset_keys)
-    return _assign_output_names_to_check_specs(check_specs)
+    return create_check_specs_by_output_name(check_specs)
 
 
-def _assign_output_names_to_check_specs(
+def create_check_specs_by_output_name(
     check_specs: Optional[Sequence[AssetCheckSpec]],
 ) -> Mapping[str, AssetCheckSpec]:
-    checks_by_output_name = {spec.get_python_identifier(): spec for spec in check_specs or []}
+    checks_by_output_name = {
+        spec.get_python_identifier(): spec
+        for spec in check.opt_sequence_param(check_specs, "check_specs", of_type=AssetCheckSpec)
+    }
     if check_specs and len(checks_by_output_name) != len(check_specs):
         duplicates = {
             item: count

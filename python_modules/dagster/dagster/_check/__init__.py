@@ -42,6 +42,8 @@ T = TypeVar("T")
 U = TypeVar("U")
 V = TypeVar("V")
 
+TTypeOrTupleOfTTypes = Union[Type[T], Tuple[Type[T], ...]]
+
 # This module contains runtime type-checking code used throughout Dagster. It is divided into three
 # sections:
 #
@@ -740,9 +742,9 @@ def iterator_param(
 def list_param(
     obj: object,
     param_name: str,
-    of_type: Optional[TypeOrTupleOfTypes] = None,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = None,
     additional_message: Optional[str] = None,
-) -> List[Any]:
+) -> List[T]:
     if not isinstance(obj, list):
         raise _param_type_mismatch_exception(obj, list, param_name, additional_message)
 
@@ -755,9 +757,9 @@ def list_param(
 def opt_list_param(
     obj: object,
     param_name: str,
-    of_type: Optional[TypeOrTupleOfTypes] = None,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = None,
     additional_message: Optional[str] = None,
-) -> List[Any]:
+) -> List[T]:
     """Ensures argument obj is a list or None; in the latter case, instantiates an empty list
     and returns it.
 
@@ -779,7 +781,7 @@ def opt_list_param(
 def opt_nullable_list_param(
     obj: None,
     param_name: str,
-    of_type: Optional[TypeOrTupleOfTypes] = ...,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = ...,
     additional_message: Optional[str] = None,
 ) -> None: ...
 
@@ -788,7 +790,7 @@ def opt_nullable_list_param(
 def opt_nullable_list_param(
     obj: List[T],
     param_name: str,
-    of_type: Optional[TypeOrTupleOfTypes] = ...,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = ...,
     additional_message: Optional[str] = None,
 ) -> List[T]: ...
 
@@ -796,9 +798,9 @@ def opt_nullable_list_param(
 def opt_nullable_list_param(
     obj: object,
     param_name: str,
-    of_type: Optional[TypeOrTupleOfTypes] = None,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = None,
     additional_message: Optional[str] = None,
-) -> Optional[List]:
+) -> Optional[List[T]]:
     """Ensures argument obj is a list or None. Returns None if input is None.
 
     If the of_type argument is provided, also ensures that list items conform to the type specified
@@ -880,16 +882,16 @@ def opt_list_elem(
 
 def is_list(
     obj: object,
-    of_type: Optional[TypeOrTupleOfTypes] = None,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = None,
     additional_message: Optional[str] = None,
-) -> List:
+) -> List[T]:
     if not isinstance(obj, list):
         raise _type_mismatch_error(obj, list, additional_message)
 
     if not of_type:
         return obj
 
-    return _check_iterable_items(obj, of_type, "list")
+    return list(_check_iterable_items(obj, of_type, "list"))
 
 
 # ########################
@@ -1228,6 +1230,20 @@ def opt_nullable_iterable_param(
         return None
 
     return iterable_param(obj, param_name, of_type, additional_message)
+
+
+def is_iterable(
+    obj: object,
+    of_type: Optional[TTypeOrTupleOfTTypes[T]] = None,
+    additional_message: Optional[str] = None,
+) -> Iterable[T]:
+    # short-circuit for common collections
+    # separate if statement to make that explicit
+    if not isinstance(obj, (list, tuple)):
+        if not isinstance(obj, Iterable):
+            raise _type_mismatch_error(obj, list, additional_message)
+
+    return obj if not of_type else _check_iterable_items(obj, of_type, "iterable")
 
 
 # ########################
@@ -1995,7 +2011,8 @@ def build_check_call_str(
         else:
             return name  # no-op
     else:
-        if origin is Annotated and args:
+        # 3.9+: origin is Annotated, 3.8: origin == args[0]
+        if (origin is Annotated and args) or (len(args) == 1 and args[0] == origin):
             return build_check_call_str(args[0], f"{name}", eval_ctx)
 
         pair_left, pair_right = _container_pair_args(args, eval_ctx)
