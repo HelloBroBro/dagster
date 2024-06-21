@@ -1,6 +1,8 @@
 import collections.abc
 import inspect
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
 from os import PathLike, fspath
 from typing import (
     AbstractSet,
@@ -1854,6 +1856,9 @@ def _check_two_dim_mapping_entries(
 # ###################################################################################################
 
 
+_contextual_ns: ContextVar[Mapping[str, Type]] = ContextVar("_contextual_ns", default={})
+
+
 class EvalContext(NamedTuple):
     """Utility class for managing references to global and local namespaces.
 
@@ -1891,27 +1896,44 @@ class EvalContext(NamedTuple):
             local_ns=local_ns,
         )
 
+    @staticmethod
+    @contextmanager
+    def contextual_namespace(ns: Mapping[str, Type]):
+        token = _contextual_ns.set(ns)
+        try:
+            yield
+        finally:
+            _contextual_ns.reset(token)
+
     def update_from_frame(self, depth: int):
         # Update the global and local namespaces with symbols from the target frame
         ctx_frame = sys._getframe(depth + 1)  # noqa # surprisingly not costly
         self.global_ns.update(ctx_frame.f_globals)
         self.local_ns.update(ctx_frame.f_locals)
 
+    def get_merged_ns(self):
+        return {
+            **_contextual_ns.get(),
+            **self.global_ns,
+            **self.local_ns,
+        }
+
     def eval_forward_ref(self, ref: ForwardRef) -> Optional[Type]:
         try:
             if sys.version_info <= (3, 9):
-                return ref._evaluate(self.global_ns, self.local_ns)  # noqa
+                return ref._evaluate(self.get_merged_ns(), {})  # noqa
             else:
-                return ref._evaluate(self.global_ns, self.local_ns, frozenset())  # noqa
+                return ref._evaluate(self.get_merged_ns(), {}, frozenset())  # noqa
         except NameError as e:
-            raise CheckError(f"Unable to resolve {ref}") from e
+            raise CheckError(
+                f"Unable to resolve {ref}, could not map string name to actual type."
+            ) from e
 
     def compile_fn(self, body: str, fn_name: str) -> Callable:
-        merged_global_ns = {**self.global_ns, **self.local_ns}
         local_ns = {}
         exec(
             body,
-            merged_global_ns,
+            self.get_merged_ns(),
             local_ns,
         )
         return local_ns[fn_name]
@@ -1921,10 +1943,13 @@ def _coerce_type(
     ttype: Optional[TypeOrTupleOfTypes],
     eval_ctx: Optional[EvalContext],
 ) -> Optional[TypeOrTupleOfTypes]:
-    # coerce input type in to the type we want to pass to check call
+    # coerce input type in to the type we want to pass to the check call
 
+    # Any type translates to passing None for the of_type argument
     if ttype is Any:
         return None
+
+    # assume naked strings should be ForwardRefs
     if isinstance(ttype, str):
         if eval_ctx is None:
             failed(
@@ -1935,12 +1960,20 @@ def _coerce_type(
         if eval_ctx is None:
             failed(f"Can not evaluate ForwardRef {ttype} without passing in EvalContext")
         return eval_ctx.eval_forward_ref(ttype)
+
+    # Unions should become a tuple of types to pass to the of_type argument
+    # ultimately used as second arg in isinstance(target, tuple_of_types)
     if get_origin(ttype) in (UnionType, Union):
-        optional_args = get_args(ttype)
-        tuple_types = _container_pair_args(optional_args, eval_ctx)
-        if None in tuple_types:
-            failed(f"Unable to turn Optional in to tuple of types for {optional_args} from {ttype}")
-        return tuple_types  # type: ignore # static analysis cant follow above check
+        union_types = get_args(ttype)
+        coerced_types = []
+        for t in union_types:
+            # coerce all the inner types
+            coerced = _coerce_type(t, eval_ctx)
+            if coerced is None or isinstance(coerced, tuple):
+                failed(f"Unable to coerce Union member {t} in {ttype}")
+            coerced_types.append(coerced)
+
+        return tuple(t for t in coerced_types)
 
     return ttype
 
