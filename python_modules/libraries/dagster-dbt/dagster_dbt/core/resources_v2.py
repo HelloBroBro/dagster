@@ -238,7 +238,8 @@ class DbtCliEventMessage:
                 f" `{self._event_history_metadata}` for the dbt resource"
                 f" `{dbt_resource_props['original_file_path']}`."
                 " Column schema metadata will not be included in the event.\n\n"
-                f"Exception: {e}"
+                f"Exception: {e}",
+                exc_info=True,
             )
 
         default_metadata = {
@@ -294,7 +295,8 @@ class DbtCliEventMessage:
                     "An error occurred while building column lineage metadata for the dbt resource"
                     f" `{dbt_resource_props['original_file_path']}`."
                     " Lineage metadata will not be included in the event.\n\n"
-                    f"Exception: {e}"
+                    f"Exception: {e}",
+                    exc_info=True,
                 )
 
             if has_asset_def:
@@ -937,12 +939,22 @@ def _fetch_column_metadata(
     dbt_resource_props = _get_dbt_resource_props_from_event(invocation, event)
 
     with adapter.connection_named(f"column_metadata_{dbt_resource_props['unique_id']}"):
-        relation = adapter.get_relation(
-            database=dbt_resource_props["database"],
-            schema=dbt_resource_props["schema"],
-            identifier=dbt_resource_props["name"],
-        )
-        cols: List[BaseColumn] = adapter.get_columns_in_relation(relation=relation)
+        try:
+            relation = adapter.Relation.create(
+                database=dbt_resource_props["database"],
+                schema=dbt_resource_props["schema"],
+                identifier=dbt_resource_props["name"],
+            )
+            cols: List[BaseColumn] = adapter.get_columns_in_relation(relation=relation)
+        except Exception as e:
+            logger.warning(
+                "An error occurred while fetching column schema metadata for the dbt resource"
+                f" `{dbt_resource_props['original_file_path']}`."
+                " Column metadata will not be included in the event.\n\n"
+                f"Exception: {e}",
+                exc_info=True,
+            )
+            return {}
         column_schema_data = {col.name: {"data_type": col.data_type} for col in cols}
 
         if with_column_lineage:
@@ -976,7 +988,8 @@ def _fetch_column_metadata(
                 f" `{col_data}` for the dbt resource"
                 f" `{dbt_resource_props['original_file_path']}`."
                 " Column schema metadata will not be included in the event.\n\n"
-                f"Exception: {e}"
+                f"Exception: {e}",
+                exc_info=True,
             )
 
         lineage_metadata = {}
@@ -998,7 +1011,8 @@ def _fetch_column_metadata(
                     "An error occurred while building column lineage metadata for the dbt resource"
                     f" `{dbt_resource_props['original_file_path']}`."
                     " Lineage metadata will not be included in the event.\n\n"
-                    f"Exception: {e}"
+                    f"Exception: {e}",
+                    exc_info=True,
                 )
 
         return {
@@ -1030,7 +1044,7 @@ def _fetch_row_count_metadata(
 
     unique_id = dbt_resource_props["unique_id"]
     logger.debug("Fetching row count for %s", unique_id)
-    table_str = f"{dbt_resource_props['database']}.{dbt_resource_props['schema']}.{dbt_resource_props['name']}"
+    relation_name = dbt_resource_props["relation_name"]
 
     try:
         with adapter.connection_named(f"row_count_{unique_id}"):
@@ -1039,7 +1053,7 @@ def _fetch_row_count_metadata(
                     SELECT
                     count(*) as row_count
                     FROM
-                    {table_str}
+                    {relation_name}
                 """,
                 fetch=True,
             )
