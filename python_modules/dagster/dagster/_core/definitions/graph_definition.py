@@ -44,6 +44,7 @@ from .dependency import (
     NodeInput,
     NodeInputHandle,
     NodeInvocation,
+    NodeOutput,
 )
 from .hook_definition import HookDefinition
 from .input import FanInInputPointer, InputDefinition, InputMapping, InputPointer
@@ -880,6 +881,45 @@ class GraphDefinition(NodeDefinition):
             )
 
         return all_destinations
+
+    def resolve_output_to_destinations(
+        self, output_name: str, handle: Optional[NodeHandle]
+    ) -> Sequence[NodeInputHandle]:
+        all_destinations: List[NodeInputHandle] = []
+        for mapping in self.output_mappings:
+            if mapping.graph_output_name != output_name:
+                continue
+            output_pointer = mapping.maps_from
+            output_node = self.node_named(output_pointer.node_name)
+
+            all_destinations.extend(
+                output_node.definition.resolve_output_to_destinations(
+                    output_pointer.output_name,
+                    NodeHandle(output_pointer.node_name, parent=handle),
+                )
+            )
+
+            output_def = output_node.definition.output_def_named(output_pointer.output_name)
+            downstream_input_handles = (
+                self.dependency_structure.output_to_downstream_inputs_for_node(
+                    output_pointer.node_name
+                ).get(NodeOutput(output_node, output_def), [])
+            )
+            for input_handle in downstream_input_handles:
+                all_destinations.append(
+                    NodeInputHandle(
+                        NodeHandle(input_handle.node_name, parent=handle), input_handle.input_name
+                    )
+                )
+
+        return all_destinations
+
+    def get_op_handles(self, parent: NodeHandle) -> AbstractSet[NodeHandle]:
+        return {
+            op_handle
+            for node in self.nodes
+            for op_handle in node.definition.get_op_handles(NodeHandle(node.name, parent=parent))
+        }
 
 
 class SubselectedGraphDefinition(GraphDefinition):

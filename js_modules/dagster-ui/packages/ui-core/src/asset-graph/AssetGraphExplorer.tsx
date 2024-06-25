@@ -40,7 +40,12 @@ import {assetKeyTokensInRange} from './assetKeyTokensInRange';
 import {AssetGraphLayout, GroupLayout} from './layout';
 import {AssetGraphExplorerSidebar} from './sidebar/Sidebar';
 import {AssetNodeForGraphQueryFragment} from './types/useAssetGraphData.types';
-import {AssetGraphFetchScope, AssetGraphQueryItem, useAssetGraphData} from './useAssetGraphData';
+import {
+  AssetGraphFetchScope,
+  AssetGraphQueryItem,
+  useAssetGraphData,
+  useFullAssetGraphData,
+} from './useAssetGraphData';
 import {AssetLocation, useFindAssetLocation} from './useFindAssetLocation';
 import {AssetLiveDataRefreshButton} from '../asset-data/AssetLiveDataProvider';
 import {LaunchAssetExecutionButton} from '../assets/LaunchAssetExecutionButton';
@@ -50,6 +55,7 @@ import {AssetFilterState} from '../assets/useAssetDefinitionFilterState';
 import {DEFAULT_MAX_ZOOM, SVGViewport} from '../graph/SVGViewport';
 import {useAssetLayout} from '../graph/asyncGraphLayout';
 import {closestNodeInDirection, isNodeOffscreen} from '../graph/common';
+import {DefinitionTag} from '../graphql/types';
 import {useQueryAndLocalStoragePersistedState} from '../hooks/useQueryAndLocalStoragePersistedState';
 import {PageLoadTrace} from '../performance';
 import {
@@ -60,6 +66,7 @@ import {
 } from '../pipelines/GraphExplorer';
 import {EmptyDAGNotice, EntirelyFilteredDAGNotice, LoadingNotice} from '../pipelines/GraphNotices';
 import {ExplorerPath} from '../pipelines/PipelinePathUtils';
+import {StaticSetFilter} from '../ui/Filters/useStaticSetFilter';
 import {GraphQueryInput} from '../ui/GraphQueryInput';
 import {Loading} from '../ui/Loading';
 
@@ -87,33 +94,37 @@ export const MINIMAL_SCALE = 0.6;
 export const GROUPS_ONLY_SCALE = 0.15;
 
 export const AssetGraphExplorer = (props: Props) => {
-  const {fetchResult, assetGraphData, fullAssetGraphData, graphQueryItems, allAssetKeys} =
-    useAssetGraphData(props.explorerPath.opsQuery, {
+  const fullAssetGraphData = useFullAssetGraphData(props.fetchOptions);
+  const {fetchResult, assetGraphData, graphQueryItems, allAssetKeys} = useAssetGraphData(
+    props.explorerPath.opsQuery,
+    {
       ...props.fetchOptions,
       computeKinds: props.assetFilterState?.filters.computeKindTags,
-    });
+    },
+  );
 
   const {explorerPath, onChangeExplorerPath} = props;
 
-  const {button, filterBar} = useAssetGraphExplorerFilters({
-    nodes: React.useMemo(
-      () => (fullAssetGraphData ? Object.values(fullAssetGraphData.nodes) : []),
-      [fullAssetGraphData],
-    ),
-    loading: fetchResult.loading ?? true,
-    isGlobalGraph: !!props.isGlobalGraph,
-    assetFilterState: props.assetFilterState,
-    explorerPath: explorerPath.opsQuery,
-    clearExplorerPath: React.useCallback(() => {
-      onChangeExplorerPath(
-        {
-          ...explorerPath,
-          opsQuery: '',
-        },
-        'push',
-      );
-    }, [explorerPath, onChangeExplorerPath]),
-  });
+  const {button, filterBar, computeKindTagsFilter, storageKindTagsFilter} =
+    useAssetGraphExplorerFilters({
+      nodes: React.useMemo(
+        () => (fullAssetGraphData ? Object.values(fullAssetGraphData.nodes) : []),
+        [fullAssetGraphData],
+      ),
+      loading: fetchResult.loading,
+      isGlobalGraph: !!props.isGlobalGraph,
+      assetFilterState: props.assetFilterState,
+      explorerPath: explorerPath.opsQuery,
+      clearExplorerPath: React.useCallback(() => {
+        onChangeExplorerPath(
+          {
+            ...explorerPath,
+            opsQuery: '',
+          },
+          'push',
+        );
+      }, [explorerPath, onChangeExplorerPath]),
+    });
 
   return (
     <Loading allowStaleData queryResult={fetchResult}>
@@ -142,6 +153,8 @@ export const AssetGraphExplorer = (props: Props) => {
             graphQueryItems={graphQueryItems}
             filterBar={filterBar}
             filterButton={button}
+            computeKindTagsFilter={computeKindTagsFilter}
+            storageKindTagsFilter={storageKindTagsFilter}
             {...props}
           />
         );
@@ -160,6 +173,8 @@ type WithDataProps = Props & {
   filterBar?: React.ReactNode;
   isGlobalGraph?: boolean;
   trace?: PageLoadTrace;
+  computeKindTagsFilter?: StaticSetFilter<string>;
+  storageKindTagsFilter?: StaticSetFilter<DefinitionTag>;
 };
 
 const AssetGraphExplorerWithData = ({
@@ -177,6 +192,8 @@ const AssetGraphExplorerWithData = ({
   filterBar,
   assetFilterState,
   isGlobalGraph = false,
+  storageKindTagsFilter,
+  computeKindTagsFilter,
   trace,
 }: WithDataProps) => {
   const findAssetLocation = useFindAssetLocation();
@@ -616,6 +633,8 @@ const AssetGraphExplorerWithData = ({
                       <AssetNode
                         definition={graphNode.definition}
                         selected={selectedGraphNodes.includes(graphNode)}
+                        computeKindTagsFilter={computeKindTagsFilter}
+                        storageKindTagsFilter={storageKindTagsFilter}
                       />
                     </AssetNodeContextMenuWrapper>
                   )}
