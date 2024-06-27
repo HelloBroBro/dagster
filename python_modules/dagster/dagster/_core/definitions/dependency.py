@@ -27,6 +27,7 @@ import dagster._check as check
 from dagster._annotations import PublicAttr, public
 from dagster._core.definitions.policy import RetryPolicy
 from dagster._core.errors import DagsterInvalidDefinitionError
+from dagster._model import dagster_model
 from dagster._serdes.serdes import whitelist_for_serdes
 from dagster._utils import hash_collection
 
@@ -344,7 +345,11 @@ class NodeHandle(NamedTuple("_NodeHandle", [("name", str), ("parent", Optional["
         )
 
     def __str__(self):
-        return self.to_string()
+        """Return a unique string representation of the handle.
+
+        Inverse of NodeHandle.from_string.
+        """
+        return str(self.parent) + "." + self.name if self.parent else self.name
 
     @property
     def root(self):
@@ -369,13 +374,6 @@ class NodeHandle(NamedTuple("_NodeHandle", [("name", str), ("parent", Optional["
             cur = cur.parent
         path.reverse()
         return path
-
-    def to_string(self) -> str:
-        """Return a unique string representation of the handle.
-
-        Inverse of NodeHandle.from_string.
-        """
-        return self.parent.to_string() + "." + self.name if self.parent else self.name
 
     def is_or_descends_from(self, handle: "NodeHandle") -> bool:
         """Check if the handle is or descends from another handle.
@@ -414,7 +412,7 @@ class NodeHandle(NamedTuple("_NodeHandle", [("name", str), ("parent", Optional["
         check.inst_param(ancestor, "ancestor", NodeHandle)
         check.invariant(
             self.is_or_descends_from(ancestor),
-            f"Handle {self.to_string()} does not descend from {ancestor.to_string()}",
+            f"Handle {self} does not descend from {ancestor}",
         )
 
         return NodeHandle.from_path(self.path[len(ancestor.path) :])
@@ -488,19 +486,23 @@ class NodeHandle(NamedTuple("_NodeHandle", [("name", str), ("parent", Optional["
         return NodeHandle(name=dict_repr["name"], parent=parent)
 
 
-class NodeInputHandle(
-    NamedTuple("_NodeInputHandle", [("node_handle", NodeHandle), ("input_name", str)])
-):
+@dagster_model(checked=False)
+class NodeInputHandle:
     """A structured object to uniquely identify inputs in the potentially recursive graph structure."""
+
+    node_handle: NodeHandle
+    input_name: str
 
     def __str__(self) -> str:
         return f"{self.node_handle}:{self.input_name}"
 
 
-class NodeOutputHandle(
-    NamedTuple("_NodeOutputHandle", [("node_handle", NodeHandle), ("output_name", str)])
-):
+@dagster_model(checked=False)
+class NodeOutputHandle:
     """A structured object to uniquely identify outputs in the potentially recursive graph structure."""
+
+    node_handle: NodeHandle
+    output_name: str
 
     def __str__(self) -> str:
         return f"{self.node_handle}:{self.output_name}"
