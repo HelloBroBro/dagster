@@ -64,7 +64,8 @@ from dagster._core.storage.tags import (
 from dagster._daemon.types import DaemonHeartbeat
 from dagster._serdes import deserialize_value, serialize_value
 from dagster._seven import JSONDecodeError
-from dagster._utils import PrintFn, utc_datetime_from_timestamp
+from dagster._time import datetime_from_timestamp, utc_datetime_from_naive
+from dagster._utils import PrintFn
 from dagster._utils.merger import merge_dicts
 
 from ..dagster_run import (
@@ -271,16 +272,24 @@ class SqlRunStorage(RunStorage):
             query = query.where(RunsTable.c.snapshot_id == filters.snapshot_id)
 
         if filters.updated_after:
-            query = query.where(RunsTable.c.update_timestamp > filters.updated_after)
+            query = query.where(
+                RunsTable.c.update_timestamp > filters.updated_after.replace(tzinfo=None)
+            )
 
         if filters.updated_before:
-            query = query.where(RunsTable.c.update_timestamp < filters.updated_before)
+            query = query.where(
+                RunsTable.c.update_timestamp < filters.updated_before.replace(tzinfo=None)
+            )
 
         if filters.created_after:
-            query = query.where(RunsTable.c.create_timestamp > filters.created_after)
+            query = query.where(
+                RunsTable.c.create_timestamp > filters.created_after.replace(tzinfo=None)
+            )
 
         if filters.created_before:
-            query = query.where(RunsTable.c.create_timestamp < filters.created_before)
+            query = query.where(
+                RunsTable.c.create_timestamp < filters.created_before.replace(tzinfo=None)
+            )
 
         if filters.tags:
             query = self._apply_tags_table_filters(query, filters.tags)
@@ -423,8 +432,12 @@ class SqlRunStorage(RunStorage):
             RunRecord(
                 storage_id=check.int_param(row["id"], "id"),
                 dagster_run=self._row_to_run(row),
-                create_timestamp=check.inst(row["create_timestamp"], datetime),
-                update_timestamp=check.inst(row["update_timestamp"], datetime),
+                create_timestamp=utc_datetime_from_naive(
+                    check.inst(row["create_timestamp"], datetime)
+                ),
+                update_timestamp=utc_datetime_from_naive(
+                    check.inst(row["update_timestamp"], datetime)
+                ),
                 start_time=(
                     check.opt_inst(row["start_time"], float) if "start_time" in row else None
                 ),
@@ -796,7 +809,7 @@ class SqlRunStorage(RunStorage):
             try:
                 conn.execute(
                     DaemonHeartbeatsTable.insert().values(
-                        timestamp=utc_datetime_from_timestamp(daemon_heartbeat.timestamp),
+                        timestamp=datetime_from_timestamp(daemon_heartbeat.timestamp),
                         daemon_type=daemon_heartbeat.daemon_type,
                         daemon_id=daemon_heartbeat.daemon_id,
                         body=serialize_value(daemon_heartbeat),
@@ -807,7 +820,7 @@ class SqlRunStorage(RunStorage):
                     DaemonHeartbeatsTable.update()
                     .where(DaemonHeartbeatsTable.c.daemon_type == daemon_heartbeat.daemon_type)
                     .values(
-                        timestamp=utc_datetime_from_timestamp(daemon_heartbeat.timestamp),
+                        timestamp=datetime_from_timestamp(daemon_heartbeat.timestamp),
                         daemon_id=daemon_heartbeat.daemon_id,
                         body=serialize_value(daemon_heartbeat),
                     )
@@ -867,7 +880,7 @@ class SqlRunStorage(RunStorage):
         values: Dict[str, Any] = dict(
             key=partition_backfill.backfill_id,
             status=partition_backfill.status.value,
-            timestamp=utc_datetime_from_timestamp(partition_backfill.backfill_timestamp),
+            timestamp=datetime_from_timestamp(partition_backfill.backfill_timestamp),
             body=serialize_value(cast(NamedTuple, partition_backfill)),
         )
 
