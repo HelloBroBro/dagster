@@ -2754,13 +2754,15 @@ export type MutationStartSensorArgs = {
 };
 
 export type MutationStopRunningScheduleArgs = {
-  scheduleOriginId: Scalars['String']['input'];
-  scheduleSelectorId: Scalars['String']['input'];
+  id?: InputMaybe<Scalars['String']['input']>;
+  scheduleOriginId?: InputMaybe<Scalars['String']['input']>;
+  scheduleSelectorId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type MutationStopSensorArgs = {
-  jobOriginId: Scalars['String']['input'];
-  jobSelectorId: Scalars['String']['input'];
+  id?: InputMaybe<Scalars['String']['input']>;
+  jobOriginId?: InputMaybe<Scalars['String']['input']>;
+  jobSelectorId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type MutationTerminatePipelineExecutionArgs = {
@@ -4355,6 +4357,7 @@ export type Run = PipelineRun & {
   canTerminate: Scalars['Boolean']['output'];
   capturedLogs: CapturedLogs;
   computeLogs: ComputeLogs;
+  creationTime: Scalars['Float']['output'];
   endTime: Maybe<Scalars['Float']['output']>;
   eventConnection: EventConnection;
   executionPlan: Maybe<ExecutionPlan>;
@@ -12730,6 +12733,8 @@ export const buildRun = (
         : relationshipsToOmit.has('ComputeLogs')
         ? ({} as ComputeLogs)
         : buildComputeLogs({}, relationshipsToOmit),
+    creationTime:
+      overrides && overrides.hasOwnProperty('creationTime') ? overrides.creationTime! : 5.95,
     endTime: overrides && overrides.hasOwnProperty('endTime') ? overrides.endTime! : 7.08,
     eventConnection:
       overrides && overrides.hasOwnProperty('eventConnection')

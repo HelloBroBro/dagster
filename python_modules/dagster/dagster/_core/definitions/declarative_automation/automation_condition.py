@@ -2,8 +2,6 @@ import datetime
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Mapping, NamedTuple, Optional, Sequence, Union
 
-import pendulum
-
 from dagster._annotations import experimental
 from dagster._core.asset_graph_view.asset_graph_view import AssetSlice, TemporalContext
 from dagster._core.definitions.asset_key import AssetKey
@@ -19,6 +17,7 @@ from dagster._core.definitions.declarative_automation.serialized_objects import 
 from dagster._core.definitions.partition import AllPartitionsSubset
 from dagster._core.definitions.time_window_partitions import BaseTimeWindowPartitionsSubset
 from dagster._model import DagsterModel
+from dagster._time import get_current_timestamp
 from dagster._utils.security import non_secure_md5_hash_str
 
 if TYPE_CHECKING:
@@ -26,6 +25,7 @@ if TYPE_CHECKING:
 
     from .automation_context import AutomationContext
     from .operands import (
+        CodeVersionChangedCondition,
         CronTickPassedCondition,
         FailedAutomationCondition,
         InLatestTimeWindowCondition,
@@ -209,6 +209,15 @@ class AutomationCondition(ABC, DagsterModel):
         return NewlyRequestedCondition()
 
     @staticmethod
+    def code_version_changed() -> "CodeVersionChangedCondition":
+        """Returns a AutomationCondition that is true for an asset partition if its asset's code
+        version has been changed since the previous tick.
+        """
+        from .operands import CodeVersionChangedCondition
+
+        return CodeVersionChangedCondition()
+
+    @staticmethod
     def cron_tick_passed(
         cron_schedule: str, cron_timezone: str = "UTC"
     ) -> "CronTickPassedCondition":
@@ -320,7 +329,7 @@ class AutomationResult(NamedTuple):
         child_results: Sequence["AutomationResult"],
     ) -> "AutomationResult":
         start_timestamp = context.create_time.timestamp()
-        end_timestamp = pendulum.now("UTC").timestamp()
+        end_timestamp = get_current_timestamp()
 
         return AutomationResult(
             condition=context.condition,
