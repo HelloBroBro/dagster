@@ -749,6 +749,7 @@ export enum ChangeReason {
   METADATA = 'METADATA',
   NEW = 'NEW',
   PARTITIONS_DEFINITION = 'PARTITIONS_DEFINITION',
+  REMOVED = 'REMOVED',
   TAGS = 'TAGS',
 }
 
@@ -2141,10 +2142,8 @@ export type JobOrPipelineSelector = {
 
 export type JobWithOps = {
   __typename: 'JobWithOps';
-  job: Job;
   jobName: Scalars['String']['output'];
   opHandleIDs: Array<Scalars['String']['output']>;
-  opsUsing: Array<SolidHandle>;
 };
 
 export type JsonMetadataEntry = MetadataEntry & {
@@ -9146,15 +9145,8 @@ export const buildJobWithOps = (
   relationshipsToOmit.add('JobWithOps');
   return {
     __typename: 'JobWithOps',
-    job:
-      overrides && overrides.hasOwnProperty('job')
-        ? overrides.job!
-        : relationshipsToOmit.has('Job')
-        ? ({} as Job)
-        : buildJob({}, relationshipsToOmit),
     jobName: overrides && overrides.hasOwnProperty('jobName') ? overrides.jobName! : 'nihil',
     opHandleIDs: overrides && overrides.hasOwnProperty('opHandleIDs') ? overrides.opHandleIDs! : [],
-    opsUsing: overrides && overrides.hasOwnProperty('opsUsing') ? overrides.opsUsing! : [],
   };
 };
 

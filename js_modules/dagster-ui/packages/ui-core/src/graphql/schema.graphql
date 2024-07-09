@@ -720,6 +720,7 @@ enum ChangeReason {
   PARTITIONS_DEFINITION
   TAGS
   METADATA
+  REMOVED
 }
 
 type AssetDependency {
@@ -2172,8 +2173,6 @@ enum NestedResourceType {
 }
 
 type JobWithOps {
-  job: Job!
-  opsUsing: [SolidHandle!]!
   jobName: String!
   opHandleIDs: [String!]!
 }

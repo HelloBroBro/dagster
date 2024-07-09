@@ -918,7 +918,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         return check.not_none(self._computation, "This AssetsDefinition has no node_def").node_def
 
     @public
-    @property
+    @cached_property
     def asset_deps(self) -> Mapping[AssetKey, AbstractSet[AssetKey]]:
         """Maps assets that are produced by this definition to assets that they depend on. The
         dependencies can be either "internal", meaning that they refer to other assets that are
@@ -982,7 +982,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         AssetsDefinition.
         """
         # the input asset keys that are directly upstream of a selected asset key
-        return {dep_key for key in self.keys for dep_key in self.asset_deps[key]}
+        return {dep.asset_key for key in self.keys for dep in self._specs_by_key[key].deps}
 
     @property
     def node_keys_by_output_name(self) -> Mapping[str, AssetKey]:
@@ -1033,7 +1033,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
     @property
     def keys_by_input_name(self) -> Mapping[str, AssetKey]:
         upstream_keys = {
-            *(dep_key for key in self.keys for dep_key in self.asset_deps[key]),
+            *(dep.asset_key for key in self.keys for dep in self._specs_by_key[key].deps),
             *(spec.asset_key for spec in self.check_specs if spec.asset_key not in self.keys),
         }
 
@@ -1507,9 +1507,9 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
 
             return SourceAsset(
                 key=key,
-                metadata=output_def.metadata,
+                metadata=spec.metadata,
                 io_manager_key=output_def.io_manager_key,
-                description=output_def.description,
+                description=spec.description,
                 resource_defs=self.resource_defs,
                 partitions_def=self.partitions_def,
                 group_name=spec.group_name,

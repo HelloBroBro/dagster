@@ -6,11 +6,13 @@ from dagster._core.definitions.remote_asset_graph import RemoteAssetGraph
 from dagster._core.errors import DagsterInvariantViolationError
 from dagster._core.remote_representation import ExternalRepository
 from dagster._core.workspace.context import BaseWorkspaceRequestContext
+from dagster._serdes import whitelist_for_serdes
 
 if TYPE_CHECKING:
     from dagster._core.definitions.events import AssetKey
 
 
+@whitelist_for_serdes
 class ChangeReason(Enum):
     NEW = "NEW"
     CODE_VERSION = "CODE_VERSION"
@@ -18,6 +20,7 @@ class ChangeReason(Enum):
     PARTITIONS_DEFINITION = "PARTITIONS_DEFINITION"
     TAGS = "TAGS"
     METADATA = "METADATA"
+    REMOVED = "REMOVED"
 
 
 def _get_external_repo_from_context(
@@ -118,6 +121,9 @@ class AssetGraphDiffer:
 
         if asset_key not in self.base_asset_graph.all_asset_keys:
             return [ChangeReason.NEW]
+
+        if asset_key not in self.branch_asset_graph.all_asset_keys:
+            return [ChangeReason.REMOVED]
 
         branch_asset = self.branch_asset_graph.get(asset_key)
         base_asset = self.base_asset_graph.get(asset_key)

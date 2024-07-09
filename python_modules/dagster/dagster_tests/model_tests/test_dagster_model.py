@@ -1,3 +1,5 @@
+import pickle
+from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -405,3 +407,72 @@ def test_build_args_and_assign(fields, defaults, expected):
     # tests / documents shared utility fn
     # don't hesitate to delete this upon refactor
     assert build_args_and_assignment_strs(fields, defaults) == expected
+
+
+@record
+class Person:
+    name: str
+    age: int
+
+
+@record_custom
+class Agent(IHaveNew):
+    name: str
+    secrets: List[str]
+
+    def __new__(cls, name: str, **kwargs):
+        return super().__new__(
+            cls,
+            name=name,
+            secrets=kwargs.get("secrets", []),
+        )
+
+
+def test_pickle():
+    p = Person(name="Lyra", age=2)
+    assert p == pickle.loads(pickle.dumps(p))
+
+    a = Agent(name="smith", secrets=["many"])
+    assert a == pickle.loads(pickle.dumps(a))
+
+    a2 = Agent(name="mr. clean")
+    assert a2 == pickle.loads(pickle.dumps(a2))
+
+
+def test_default_collision() -> None:
+    class BadBase(ABC):
+        @property
+        @abstractmethod
+        def abstract_prop(self): ...
+
+        def some_method(self): ...
+
+    with pytest.raises(check.CheckError, match="Conflicting @property"):
+
+        @record
+        class _(BadBase):
+            abstract_prop: Any
+
+    with pytest.raises(check.CheckError, match="Conflicting function"):
+
+        @record
+        class _(BadBase):
+            some_method: Any
+
+    class Base(ABC):
+        thing: Any
+
+    @record
+    class Impl(Base):
+        thing: Any
+
+    assert Impl(thing=3).thing == 3
+
+    with pytest.raises(check.CheckError, match="will have to override __new__"):
+
+        def _some_func():
+            return 4
+
+        @record
+        class _(Base):
+            thing: Any = _some_func
