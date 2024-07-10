@@ -24,7 +24,7 @@ from typing import (
 
 import dagster._check as check
 from dagster._annotations import experimental_param, public
-from dagster._core.definitions.asset_check_spec import AssetCheckKey, AssetCheckSpec
+from dagster._core.definitions.asset_check_spec import AssetCheckSpec
 from dagster._core.definitions.asset_dep import AssetDep
 from dagster._core.definitions.asset_spec import (
     SYSTEM_METADATA_KEY_AUTO_CREATED_STUB_ASSET,
@@ -33,6 +33,9 @@ from dagster._core.definitions.asset_spec import (
 )
 from dagster._core.definitions.auto_materialize_policy import AutoMaterializePolicy
 from dagster._core.definitions.backfill_policy import BackfillPolicy, BackfillPolicyType
+from dagster._core.definitions.declarative_automation.automation_condition import (
+    AutomationCondition,
+)
 from dagster._core.definitions.dependency import NodeHandle, NodeOutputHandle
 from dagster._core.definitions.freshness_policy import FreshnessPolicy
 from dagster._core.definitions.graph_definition import SubselectedGraphDefinition
@@ -67,8 +70,9 @@ from dagster._utils.merger import merge_dicts
 from dagster._utils.security import non_secure_md5_hash_str
 from dagster._utils.warnings import ExperimentalWarning, disable_dagster_warnings
 
+from .asset_key import AssetCheckKey, AssetKey, AssetKeyOrCheckKey
 from .asset_spec import SYSTEM_METADATA_KEY_IO_MANAGER_KEY, AssetSpec
-from .events import AssetKey, CoercibleToAssetKey, CoercibleToAssetKeyPrefix
+from .events import CoercibleToAssetKey, CoercibleToAssetKeyPrefix
 from .node_definition import NodeDefinition
 from .op_definition import OpDefinition
 from .partition import PartitionsDefinition
@@ -82,7 +86,6 @@ from .source_asset import SourceAsset
 from .utils import DEFAULT_GROUP_NAME, validate_tags_strict
 
 if TYPE_CHECKING:
-    from .base_asset_graph import AssetKeyOrCheckKey
     from .graph_definition import GraphDefinition
 
 ASSET_SUBSET_INPUT_PREFIX = "__subset_input__"
@@ -148,7 +151,7 @@ class AssetGraphComputation(IHaveNew):
     @cached_property
     def asset_or_check_keys_by_op_output_handle(
         self,
-    ) -> Mapping[NodeOutputHandle, "AssetKeyOrCheckKey"]:
+    ) -> Mapping[NodeOutputHandle, AssetKeyOrCheckKey]:
         result = {}
         for output_name, key in itertools.chain(
             self.keys_by_output_name.items(), self.check_keys_by_output_name.items()
@@ -214,7 +217,6 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         metadata_by_key: Optional[Mapping[AssetKey, ArbitraryMetadataMapping]] = None,
         tags_by_key: Optional[Mapping[AssetKey, Mapping[str, str]]] = None,
         freshness_policies_by_key: Optional[Mapping[AssetKey, FreshnessPolicy]] = None,
-        auto_materialize_policies_by_key: Optional[Mapping[AssetKey, AutoMaterializePolicy]] = None,
         backfill_policy: Optional[BackfillPolicy] = None,
         # descriptions by key is more accurately understood as _overriding_ the descriptions
         # by key that are in the OutputDefinitions associated with the asset key.
@@ -232,6 +234,8 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         owners_by_key: Optional[Mapping[AssetKey, Sequence[str]]] = None,
         specs: Optional[Sequence[AssetSpec]] = None,
         execution_type: Optional[AssetExecutionType] = None,
+        # TODO: FOU-243
+        auto_materialize_policies_by_key: Optional[Mapping[AssetKey, AutoMaterializePolicy]] = None,
         # if adding new fields, make sure to handle them in the with_attributes, from_graph,
         # from_op, and get_attributes_dict methods
     ):
@@ -247,6 +251,12 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             "check_specs_by_output_name",
             key_type=str,
             value_type=AssetCheckSpec,
+        )
+
+        automation_conditions_by_key = (
+            {k: v.to_automation_condition() for k, v in auto_materialize_policies_by_key.items()}
+            if auto_materialize_policies_by_key
+            else None
         )
 
         if node_def is None:
@@ -327,6 +337,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             check.invariant(tags_by_key is None)
             check.invariant(freshness_policies_by_key is None)
             check.invariant(auto_materialize_policies_by_key is None)
+            check.invariant(automation_conditions_by_key is None)
             check.invariant(descriptions_by_key is None)
             check.invariant(owners_by_key is None)
             check.invariant(partition_mappings is None)
@@ -366,7 +377,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 owners_by_key=owners_by_key,
                 group_names_by_key=group_names_by_key,
                 freshness_policies_by_key=freshness_policies_by_key,
-                auto_materialize_policies_by_key=auto_materialize_policies_by_key,
+                automation_conditions_by_key=automation_conditions_by_key,
                 metadata_by_key=metadata_by_key,
                 descriptions_by_key=descriptions_by_key,
                 code_versions_by_key=None,
@@ -516,14 +527,18 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         metadata_by_output_name: Optional[Mapping[str, Optional[ArbitraryMetadataMapping]]] = None,
         tags_by_output_name: Optional[Mapping[str, Optional[Mapping[str, str]]]] = None,
         freshness_policies_by_output_name: Optional[Mapping[str, Optional[FreshnessPolicy]]] = None,
-        auto_materialize_policies_by_output_name: Optional[
-            Mapping[str, Optional[AutoMaterializePolicy]]
+        automation_conditions_by_output_name: Optional[
+            Mapping[str, Optional[AutomationCondition]]
         ] = None,
         backfill_policy: Optional[BackfillPolicy] = None,
         can_subset: bool = False,
         check_specs: Optional[Sequence[AssetCheckSpec]] = None,
         owners_by_output_name: Optional[Mapping[str, Sequence[str]]] = None,
         code_versions_by_output_name: Optional[Mapping[str, Optional[str]]] = None,
+        # TODO: FOU-243
+        auto_materialize_policies_by_output_name: Optional[
+            Mapping[str, Optional[AutoMaterializePolicy]]
+        ] = None,
     ) -> "AssetsDefinition":
         """Constructs an AssetsDefinition from a GraphDefinition.
 
@@ -575,8 +590,8 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 FreshnessPolicy to be associated with some or all of the output assets for this node.
                 Keys are the names of the outputs, and values are the FreshnessPolicies to be attached
                 to the associated asset.
-            auto_materialize_policies_by_output_name (Optional[Mapping[str, Optional[AutoMaterializePolicy]]]): Defines an
-                AutoMaterializePolicy to be associated with some or all of the output assets for this node.
+            automation_conditions_by_output_name (Optional[Mapping[str, Optional[AutomationCondition]]]): Defines an
+                AutomationCondition to be associated with some or all of the output assets for this node.
                 Keys are the names of the outputs, and values are the AutoMaterializePolicies to be attached
                 to the associated asset.
             backfill_policy (Optional[BackfillPolicy]): Defines this asset's BackfillPolicy
@@ -599,7 +614,10 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             metadata_by_output_name=metadata_by_output_name,
             tags_by_output_name=tags_by_output_name,
             freshness_policies_by_output_name=freshness_policies_by_output_name,
-            auto_materialize_policies_by_output_name=auto_materialize_policies_by_output_name,
+            automation_conditions_by_output_name=_resolve_automation_conditions_by_output_name(
+                automation_conditions_by_output_name,
+                auto_materialize_policies_by_output_name,
+            ),
             backfill_policy=backfill_policy,
             can_subset=can_subset,
             check_specs=check_specs,
@@ -624,11 +642,15 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         metadata_by_output_name: Optional[Mapping[str, Optional[ArbitraryMetadataMapping]]] = None,
         tags_by_output_name: Optional[Mapping[str, Optional[Mapping[str, str]]]] = None,
         freshness_policies_by_output_name: Optional[Mapping[str, Optional[FreshnessPolicy]]] = None,
-        auto_materialize_policies_by_output_name: Optional[
-            Mapping[str, Optional[AutoMaterializePolicy]]
+        automation_conditions_by_output_name: Optional[
+            Mapping[str, Optional[AutomationCondition]]
         ] = None,
         backfill_policy: Optional[BackfillPolicy] = None,
         can_subset: bool = False,
+        # TODO: FOU-243
+        auto_materialize_policies_by_output_name: Optional[
+            Mapping[str, Optional[AutoMaterializePolicy]]
+        ] = None,
     ) -> "AssetsDefinition":
         """Constructs an AssetsDefinition from an OpDefinition.
 
@@ -676,8 +698,8 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 FreshnessPolicy to be associated with some or all of the output assets for this node.
                 Keys are the names of the outputs, and values are the FreshnessPolicies to be attached
                 to the associated asset.
-            auto_materialize_policies_by_output_name (Optional[Mapping[str, Optional[AutoMaterializePolicy]]]): Defines an
-                AutoMaterializePolicy to be associated with some or all of the output assets for this node.
+            automation_conditions_by_output_name (Optional[Mapping[str, Optional[AutomationCondition]]]): Defines an
+                AutomationCondition to be associated with some or all of the output assets for this node.
                 Keys are the names of the outputs, and values are the AutoMaterializePolicies to be attached
                 to the associated asset.
             backfill_policy (Optional[BackfillPolicy]): Defines this asset's BackfillPolicy
@@ -696,7 +718,10 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             metadata_by_output_name=metadata_by_output_name,
             tags_by_output_name=tags_by_output_name,
             freshness_policies_by_output_name=freshness_policies_by_output_name,
-            auto_materialize_policies_by_output_name=auto_materialize_policies_by_output_name,
+            automation_conditions_by_output_name=_resolve_automation_conditions_by_output_name(
+                automation_conditions_by_output_name,
+                auto_materialize_policies_by_output_name,
+            ),
             backfill_policy=backfill_policy,
             can_subset=can_subset,
         )
@@ -719,8 +744,8 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         tags_by_output_name: Optional[Mapping[str, Optional[Mapping[str, str]]]] = None,
         freshness_policies_by_output_name: Optional[Mapping[str, Optional[FreshnessPolicy]]] = None,
         code_versions_by_output_name: Optional[Mapping[str, Optional[str]]] = None,
-        auto_materialize_policies_by_output_name: Optional[
-            Mapping[str, Optional[AutoMaterializePolicy]]
+        automation_conditions_by_output_name: Optional[
+            Mapping[str, Optional[AutomationCondition]]
         ] = None,
         backfill_policy: Optional[BackfillPolicy] = None,
         can_subset: bool = False,
@@ -823,8 +848,8 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             owners_by_key=_output_dict_to_asset_dict(owners_by_output_name),
             group_names_by_key=group_names_by_key,
             freshness_policies_by_key=_output_dict_to_asset_dict(freshness_policies_by_output_name),
-            auto_materialize_policies_by_key=_output_dict_to_asset_dict(
-                auto_materialize_policies_by_output_name
+            automation_conditions_by_key=_output_dict_to_asset_dict(
+                automation_conditions_by_output_name
             ),
             metadata_by_key=_output_dict_to_asset_dict(metadata_by_output_name),
             descriptions_by_key=_output_dict_to_asset_dict(descriptions_by_output_name),
@@ -1017,7 +1042,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         }
 
     @property
-    def asset_and_check_keys_by_output_name(self) -> Mapping[str, "AssetKeyOrCheckKey"]:
+    def asset_and_check_keys_by_output_name(self) -> Mapping[str, AssetKeyOrCheckKey]:
         return merge_dicts(
             self.keys_by_output_name,
             {
@@ -1027,7 +1052,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         )
 
     @property
-    def asset_and_check_keys(self) -> AbstractSet["AssetKeyOrCheckKey"]:
+    def asset_and_check_keys(self) -> AbstractSet[AssetKeyOrCheckKey]:
         return set(self.keys).union(self.check_keys)
 
     @property
@@ -1055,6 +1080,14 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             key: spec.auto_materialize_policy
             for key, spec in self._specs_by_key.items()
             if spec.auto_materialize_policy
+        }
+
+    @property
+    def automation_conditions_by_key(self) -> Mapping[AssetKey, AutomationCondition]:
+        return {
+            key: spec.automation_condition
+            for key, spec in self._specs_by_key.items()
+            if spec.automation_condition
         }
 
     # Applies only to external observable assets. Can be removed when we fold
@@ -1256,8 +1289,16 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
                 if old_value and old_value != default_value and attr_name in replace_dict:
                     conflicts_by_attr_name[attr_name].add(key)
 
+            if isinstance(auto_materialize_policy, dict):
+                automation_condition = {
+                    k: v.to_automation_condition() for k, v in auto_materialize_policy.items()
+                }
+            elif isinstance(auto_materialize_policy, AutoMaterializePolicy):
+                automation_condition = auto_materialize_policy.to_automation_condition()
+            else:
+                automation_condition = None
             update_replace_dict_and_conflicts(
-                new_value=auto_materialize_policy, attr_name="auto_materialize_policy"
+                new_value=automation_condition, attr_name="automation_condition"
             )
             update_replace_dict_and_conflicts(
                 new_value=freshness_policy, attr_name="freshness_policy"
@@ -1371,7 +1412,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
         dep_op_handles_by_asset_or_check_key = cast(
             # because self.node_def is a graph, these NodeHandles that reference ops inside it will
             # not be None
-            Mapping["AssetKeyOrCheckKey", AbstractSet[NodeHandle]],
+            Mapping[AssetKeyOrCheckKey, AbstractSet[NodeHandle]],
             self.dep_op_handles_by_asset_or_check_key,
         )
         op_selection: List[str] = []
@@ -1575,7 +1616,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
     @cached_property
     def dep_op_handles_by_asset_or_check_key(
         self,
-    ) -> Mapping["AssetKeyOrCheckKey", AbstractSet[Optional[NodeHandle]]]:
+    ) -> Mapping[AssetKeyOrCheckKey, AbstractSet[Optional[NodeHandle]]]:
         result = defaultdict(set)
         for op_output_handle, keys in self.asset_or_check_keys_by_dep_op_output_handle.items():
             for key in keys:
@@ -1586,7 +1627,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
     @cached_property
     def asset_or_check_keys_by_dep_op_output_handle(
         self,
-    ) -> Mapping[NodeOutputHandle, AbstractSet["AssetKeyOrCheckKey"]]:
+    ) -> Mapping[NodeOutputHandle, AbstractSet[AssetKeyOrCheckKey]]:
         """Returns a mapping between op outputs and the assets and asset checks that, when selected,
         those op outputs need to be produced for.
 
@@ -1618,7 +1659,7 @@ class AssetsDefinition(ResourceAddable, RequiresResources, IHasInternalInit):
             *(op_output_graph.op_output_handles - op_output_graph.upstream.keys()),
         ]
 
-        result: Dict[NodeOutputHandle, Set["AssetKeyOrCheckKey"]] = defaultdict(set)
+        result: Dict[NodeOutputHandle, Set[AssetKeyOrCheckKey]] = defaultdict(set)
 
         for op_output_handle in reverse_toposorted_op_outputs_handles:
             asset_key_or_check_key = asset_or_check_keys_by_op_output_handle.get(op_output_handle)
@@ -1758,6 +1799,26 @@ def _validate_graph_def(graph_def: "GraphDefinition", prefix: Optional[Sequence[
     )
 
 
+def _resolve_automation_conditions_by_output_name(
+    automation_conditions_by_output_name: Optional[Mapping[str, Optional[AutomationCondition]]],
+    auto_materialize_policies_by_output_name: Optional[
+        Mapping[str, Optional[AutoMaterializePolicy]]
+    ],
+) -> Optional[Mapping[str, Optional[AutomationCondition]]]:
+    if auto_materialize_policies_by_output_name is not None:
+        check.param_invariant(
+            automation_conditions_by_output_name is None,
+            "automation_conditions_by_output_name",
+            "Cannot supply both `automation_conditions_by_output_name` and `auto_materialize_policies_by_output_name`",
+        )
+        return {
+            k: v.to_automation_condition() if v else None
+            for k, v in auto_materialize_policies_by_output_name.items()
+        }
+    else:
+        return automation_conditions_by_output_name
+
+
 def _resolve_selections(
     all_asset_keys: AbstractSet[AssetKey],
     all_check_keys: AbstractSet[AssetCheckKey],
@@ -1809,7 +1870,7 @@ def _asset_specs_from_attr_key_params(
     metadata_by_key: Optional[Mapping[AssetKey, ArbitraryMetadataMapping]],
     tags_by_key: Optional[Mapping[AssetKey, Mapping[str, str]]],
     freshness_policies_by_key: Optional[Mapping[AssetKey, FreshnessPolicy]],
-    auto_materialize_policies_by_key: Optional[Mapping[AssetKey, AutoMaterializePolicy]],
+    automation_conditions_by_key: Optional[Mapping[AssetKey, AutomationCondition]],
     code_versions_by_key: Optional[Mapping[AssetKey, str]],
     descriptions_by_key: Optional[Mapping[AssetKey, str]],
     owners_by_key: Optional[Mapping[AssetKey, Sequence[str]]],
@@ -1841,11 +1902,11 @@ def _asset_specs_from_attr_key_params(
         value_type=FreshnessPolicy,
     )
 
-    validated_auto_materialize_policies_by_key = check.opt_mapping_param(
-        auto_materialize_policies_by_key,
-        "auto_materialize_policies_by_key",
+    validated_automation_conditions_by_key = check.opt_mapping_param(
+        automation_conditions_by_key,
+        "automation_conditions_by_key",
         key_type=AssetKey,
-        value_type=AutoMaterializePolicy,
+        value_type=AutomationCondition,
     )
 
     validated_owners_by_key = check.opt_mapping_param(
@@ -1876,7 +1937,7 @@ def _asset_specs_from_attr_key_params(
                     metadata=validated_metadata_by_key.get(key),
                     tags=validated_tags_by_key.get(key),
                     freshness_policy=validated_freshness_policies_by_key.get(key),
-                    auto_materialize_policy=validated_auto_materialize_policies_by_key.get(key),
+                    automation_condition=validated_automation_conditions_by_key.get(key),
                     owners=validated_owners_by_key.get(key),
                     group_name=validated_group_names_by_key.get(key),
                     code_version=validated_code_versions_by_key.get(key),
@@ -1884,6 +1945,7 @@ def _asset_specs_from_attr_key_params(
                     # Value here is irrelevant, because it will be replaced by value from
                     # NodeDefinition
                     skippable=False,
+                    auto_materialize_policy=None,
                 )
             )
 

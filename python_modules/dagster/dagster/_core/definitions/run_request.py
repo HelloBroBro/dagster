@@ -17,6 +17,10 @@ import dagster._check as check
 from dagster._annotations import PublicAttr, experimental_param
 from dagster._core.definitions.asset_check_evaluation import AssetCheckEvaluation
 from dagster._core.definitions.asset_check_spec import AssetCheckKey
+from dagster._core.definitions.dynamic_partitions_request import (
+    AddDynamicPartitionsRequest,
+    DeleteDynamicPartitionsRequest,
+)
 from dagster._core.definitions.events import AssetKey, AssetMaterialization, AssetObservation
 from dagster._core.definitions.partition_key_range import PartitionKeyRange
 from dagster._core.definitions.utils import NormalizedTags, normalize_tags
@@ -27,6 +31,7 @@ from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_START_TAG,
     PARTITION_NAME_TAG,
 )
+from dagster._record import IHaveNew, LegacyNamedTupleMixin, record_custom
 from dagster._serdes.serdes import whitelist_for_serdes
 from dagster._utils.error import SerializableErrorInfo
 
@@ -64,69 +69,16 @@ class SkipReason(NamedTuple("_SkipReason", [("skip_message", PublicAttr[Optional
 
 
 @whitelist_for_serdes
-class AddDynamicPartitionsRequest(
-    NamedTuple(
-        "_AddDynamicPartitionsRequest",
-        [
-            ("partitions_def_name", str),
-            ("partition_keys", Sequence[str]),
-        ],
-    )
-):
-    """A request to add partitions to a dynamic partitions definition, to be evaluated by a sensor or schedule."""
-
-    def __new__(
-        cls,
-        partitions_def_name: str,
-        partition_keys: Sequence[str],
-    ):
-        return super(AddDynamicPartitionsRequest, cls).__new__(
-            cls,
-            partitions_def_name=check.str_param(partitions_def_name, "partitions_def_name"),
-            partition_keys=check.list_param(partition_keys, "partition_keys", of_type=str),
-        )
-
-
-@whitelist_for_serdes
-class DeleteDynamicPartitionsRequest(
-    NamedTuple(
-        "_AddDynamicPartitionsRequest",
-        [
-            ("partitions_def_name", str),
-            ("partition_keys", Sequence[str]),
-        ],
-    )
-):
-    """A request to delete partitions to a dynamic partitions definition, to be evaluated by a sensor or schedule."""
-
-    def __new__(
-        cls,
-        partitions_def_name: str,
-        partition_keys: Sequence[str],
-    ):
-        return super(DeleteDynamicPartitionsRequest, cls).__new__(
-            cls,
-            partitions_def_name=check.str_param(partitions_def_name, "partitions_def_name"),
-            partition_keys=check.list_param(partition_keys, "partition_keys", of_type=str),
-        )
-
-
-@whitelist_for_serdes
-class RunRequest(
-    NamedTuple(
-        "_RunRequest",
-        [
-            ("run_key", PublicAttr[Optional[str]]),
-            ("run_config", PublicAttr[Mapping[str, Any]]),
-            ("tags", PublicAttr[Mapping[str, str]]),
-            ("job_name", PublicAttr[Optional[str]]),
-            ("asset_selection", PublicAttr[Optional[Sequence[AssetKey]]]),
-            ("stale_assets_only", PublicAttr[bool]),
-            ("partition_key", PublicAttr[Optional[str]]),
-            ("asset_check_keys", PublicAttr[Optional[Sequence[AssetCheckKey]]]),
-        ],
-    )
-):
+@record_custom
+class RunRequest(IHaveNew, LegacyNamedTupleMixin):
+    run_key: Optional[str]
+    run_config: Mapping[str, Any]
+    tags: Mapping[str, str]
+    job_name: Optional[str]
+    asset_selection: Optional[Sequence[AssetKey]]
+    stale_assets_only: bool
+    partition_key: Optional[str]
+    asset_check_keys: Optional[Sequence[AssetCheckKey]]
     """Represents all the information required to launch a single run.  Must be returned by a
     SensorDefinition or ScheduleDefinition's evaluation function for a run to be launched.
 
@@ -174,22 +126,16 @@ class RunRequest(
     ):
         from dagster._core.definitions.run_config import convert_config_input
 
-        return super(RunRequest, cls).__new__(
+        return super().__new__(
             cls,
-            run_key=check.opt_str_param(run_key, "run_key"),
-            run_config=check.opt_mapping_param(
-                convert_config_input(run_config), "run_config", key_type=str
-            ),
+            run_key=run_key,
+            run_config=convert_config_input(run_config) or {},
             tags=normalize_tags(tags).tags,
-            job_name=check.opt_str_param(job_name, "job_name"),
-            asset_selection=check.opt_nullable_sequence_param(
-                asset_selection, "asset_selection", of_type=AssetKey
-            ),
-            stale_assets_only=check.bool_param(stale_assets_only, "stale_assets_only"),
-            partition_key=check.opt_str_param(partition_key, "partition_key"),
-            asset_check_keys=check.opt_nullable_sequence_param(
-                asset_check_keys, "asset_check_keys", of_type=AssetCheckKey
-            ),
+            job_name=job_name,
+            asset_selection=asset_selection,
+            stale_assets_only=stale_assets_only,
+            partition_key=partition_key,
+            asset_check_keys=asset_check_keys,
         )
 
     def with_replaced_attrs(self, **kwargs: Any) -> "RunRequest":
