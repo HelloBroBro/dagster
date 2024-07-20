@@ -91,7 +91,7 @@ from ..dbt_manifest import DbtManifestParam, validate_manifest
 from ..dbt_project import DbtProject
 from ..errors import DagsterDbtCliRuntimeError
 from ..utils import ASSET_RESOURCE_TYPES, get_dbt_resource_props_by_dbt_unique_id_from_manifest
-from .utils import imap
+from .utils import exhaust_iterator_and_yield_results_with_exception, imap
 
 IS_DBT_CORE_VERSION_LESS_THAN_1_8_0 = version.parse(dbt_version) < version.parse("1.8.0")
 
@@ -398,6 +398,21 @@ class DbtCliEventMessage:
 DbtDagsterEventType = Union[Output, AssetMaterialization, AssetCheckResult, AssetObservation]
 
 
+class RelationKey(NamedTuple):
+    """Hashable representation of the information needed to identify a relation in a database."""
+
+    database: str
+    schema: str
+    identifier: str
+
+
+class RelationData(NamedTuple):
+    """Relation metadata queried from a database."""
+
+    name: str
+    columns: List[BaseColumn]
+
+
 @dataclass
 class DbtCliInvocation:
     """The representation of an invoked dbt command.
@@ -426,6 +441,35 @@ class DbtCliInvocation:
     )
     _stdout: List[Union[str, Dict[str, Any]]] = field(init=False, default_factory=list)
     _error_messages: List[str] = field(init=False, default_factory=list)
+
+    # Caches fetching relation column metadata to avoid redundant queries to the database.
+    _relation_column_metadata_cache: Dict[RelationKey, RelationData] = field(
+        init=False, default_factory=dict
+    )
+
+    def _get_columns_from_dbt_resource_props(
+        self, adapter: BaseAdapter, dbt_resource_props: Dict[str, Any]
+    ) -> RelationData:
+        """Given a dbt resource properties dictionary, fetches the resource's column metadata from
+        the database, or returns the cached metadata if it has already been fetched.
+        """
+        relation_key = RelationKey(
+            database=dbt_resource_props["database"],
+            schema=dbt_resource_props["schema"],
+            identifier=(
+                dbt_resource_props["identifier"]
+                if dbt_resource_props["unique_id"].startswith("source")
+                else dbt_resource_props["alias"]
+            ),
+        )
+        if relation_key in self._relation_column_metadata_cache:
+            return self._relation_column_metadata_cache[relation_key]
+
+        relation = _get_relation_from_adapter(adapter=adapter, relation_key=relation_key)
+        cols: List = adapter.get_columns_in_relation(relation=relation)
+        return self._relation_column_metadata_cache.setdefault(
+            relation_key, RelationData(name=str(relation), columns=cols)
+        )
 
     @classmethod
     def run(
@@ -778,20 +822,6 @@ class EventHistoryMetadata(NamedTuple):
     parents: Dict[str, Dict[str, Any]]
 
 
-def _build_relation_from_dbt_resource_props(
-    adapter: BaseAdapter, dbt_resource_props: Dict[str, Any]
-) -> BaseRelation:
-    return adapter.Relation.create(
-        database=dbt_resource_props["database"],
-        schema=dbt_resource_props["schema"],
-        identifier=(
-            dbt_resource_props["identifier"]
-            if dbt_resource_props["unique_id"].startswith("source")
-            else dbt_resource_props["alias"]
-        ),
-    )
-
-
 def _build_column_lineage_metadata(
     event_history_metadata: EventHistoryMetadata,
     dbt_resource_props: Dict[str, Any],
@@ -946,6 +976,14 @@ def _build_column_lineage_metadata(
         )
 
 
+def _get_relation_from_adapter(adapter: BaseAdapter, relation_key: RelationKey) -> BaseRelation:
+    return adapter.Relation.create(
+        database=relation_key.database,
+        schema=relation_key.schema,
+        identifier=relation_key.identifier,
+    )
+
+
 def _fetch_column_metadata(
     invocation: DbtCliInvocation, event: DbtDagsterEventType, with_column_lineage: bool
 ) -> Optional[Dict[str, Any]]:
@@ -967,10 +1005,9 @@ def _fetch_column_metadata(
 
     with adapter.connection_named(f"column_metadata_{dbt_resource_props['unique_id']}"):
         try:
-            relation = _build_relation_from_dbt_resource_props(
+            cols = invocation._get_columns_from_dbt_resource_props(  # noqa: SLF001
                 adapter=adapter, dbt_resource_props=dbt_resource_props
-            )
-            cols: List[BaseColumn] = adapter.get_columns_in_relation(relation=relation)
+            ).columns
         except Exception as e:
             logger.warning(
                 "An error occurred while fetching column schema metadata for the dbt resource"
@@ -1008,14 +1045,11 @@ def _fetch_column_metadata(
                         parent_unique_id
                     ) or invocation.manifest["sources"].get(parent_unique_id)
 
-                    parent_relation = _build_relation_from_dbt_resource_props(
+                    parent_name, parent_columns = invocation._get_columns_from_dbt_resource_props(  # noqa: SLF001
                         adapter=adapter, dbt_resource_props=dbt_parent_resource_props
                     )
-                    parent_columns: List[BaseColumn] = adapter.get_columns_in_relation(
-                        relation=parent_relation
-                    )
 
-                    parents[str(parent_relation)] = {
+                    parents[parent_name] = {
                         col.name: {"data_type": col.data_type} for col in parent_columns
                     }
 
@@ -1191,7 +1225,8 @@ class DbtEventIterator(Generic[T], abc.Iterator):
             from dbt.adapters.duckdb import DuckDBAdapter
 
             if isinstance(self._dbt_cli_invocation.adapter, DuckDBAdapter):
-                event_stream = iter(list(self))
+                event_stream = exhaust_iterator_and_yield_results_with_exception(self)
+
         except ImportError:
             pass
 
@@ -1356,23 +1391,26 @@ class DbtCliResource(ConfigurableResource):
 
     def __init__(
         self,
-        project_dir: Union[str, DbtProject],
+        project_dir: Union[str, Path, DbtProject],
         global_config_flags: Optional[List[str]] = None,
-        profiles_dir: Optional[str] = None,
+        profiles_dir: Optional[Union[str, Path]] = None,
         profile: Optional[str] = None,
         target: Optional[str] = None,
-        dbt_executable: str = DBT_EXECUTABLE,
-        state_path: Optional[str] = None,
+        dbt_executable: Union[str, Path] = DBT_EXECUTABLE,
+        state_path: Optional[Union[str, Path]] = None,
         **kwargs,  # allow custom subclasses to add fields
     ):
         if isinstance(project_dir, DbtProject):
             if not state_path and project_dir.state_path:
-                state_path = os.fspath(project_dir.state_path)
+                state_path = project_dir.state_path
 
             if not target and project_dir.target:
                 target = project_dir.target
 
-            project_dir = os.fspath(project_dir.project_dir)
+            project_dir = project_dir.project_dir
+
+        project_dir = os.fspath(project_dir)
+        state_path = state_path and os.fspath(state_path)
 
         # static typing doesn't understand whats going on here, thinks these fields dont exist
         super().__init__(
@@ -2028,20 +2066,24 @@ def get_dbt_resource_names_for_output_names(
     dbt_resource_props_by_output_name: Mapping[str, Any],
     dagster_dbt_translator: DagsterDbtTranslator,
 ) -> Sequence[str]:
+    dbt_resource_props_gen = (
+        dbt_resource_props_by_output_name[output_name]
+        for output_name in output_names
+        # output names corresponding to asset checks won't be in this dict
+        if output_name in dbt_resource_props_by_output_name
+    )
+
     # Explicitly select a dbt resource by its file name.
     # https://docs.getdbt.com/reference/node-selection/methods#the-file-method
     if dagster_dbt_translator.settings.enable_dbt_selection_by_name:
         return [
-            Path(dbt_resource_props_by_output_name[output_name]["original_file_path"]).stem
-            for output_name in output_names
+            Path(dbt_resource_props["original_file_path"]).stem
+            for dbt_resource_props in dbt_resource_props_gen
         ]
 
     # Explictly select a dbt resource by its fully qualified name (FQN).
     # https://docs.getdbt.com/reference/node-selection/methods#the-file-or-fqn-method
-    return [
-        ".".join(dbt_resource_props_by_output_name[output_name]["fqn"])
-        for output_name in output_names
-    ]
+    return [".".join(dbt_resource_props["fqn"]) for dbt_resource_props in dbt_resource_props_gen]
 
 
 def get_dbt_test_names_for_asset_checks(

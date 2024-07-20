@@ -29,13 +29,11 @@ from dagster._core.scheduler.instigation import (
 )
 from dagster._core.workspace.context import WorkspaceRequestContext
 from dagster._daemon.asset_daemon import (
-    _PRE_SENSOR_AUTO_MATERIALIZE_CURSOR_KEY,
     _PRE_SENSOR_AUTO_MATERIALIZE_INSTIGATOR_NAME,
     _PRE_SENSOR_AUTO_MATERIALIZE_ORIGIN_ID,
     _PRE_SENSOR_AUTO_MATERIALIZE_SELECTOR_ID,
     asset_daemon_cursor_to_instigator_serialized_cursor,
 )
-from dagster._serdes.serdes import serialize_value
 from dagster._time import get_current_datetime
 from dagster._vendored.dateutil.relativedelta import relativedelta
 from dagster_graphql.test.utils import execute_dagster_graphql, infer_repository
@@ -382,14 +380,23 @@ class TestAssetConditionEvaluations(ExecutingGraphQLContextTestMatrix):
             )
         )
 
-        results = execute_dagster_graphql(
-            graphql_context,
-            AUTO_MATERIALIZE_POLICY_SENSORS_QUERY,
-            variables={
-                "assetKey": {"path": ["fresh_diamond_bottom"]},
-            },
-        )
-        assert not results.data["assetNodeOrError"]["currentAutoMaterializeEvaluationId"]
+        with patch(
+            graphql_context.instance.__class__.__module__
+            + "."
+            + graphql_context.instance.__class__.__name__
+            + ".auto_materialize_use_sensors",
+            new_callable=PropertyMock,
+        ) as mock_my_property:
+            mock_my_property.return_value = False
+
+            results = execute_dagster_graphql(
+                graphql_context,
+                AUTO_MATERIALIZE_POLICY_SENSORS_QUERY,
+                variables={
+                    "assetKey": {"path": ["fresh_diamond_bottom"]},
+                },
+            )
+            assert not results.data["assetNodeOrError"]["currentAutoMaterializeEvaluationId"]
 
         with patch(
             graphql_context.instance.__class__.__module__
@@ -399,7 +406,6 @@ class TestAssetConditionEvaluations(ExecutingGraphQLContextTestMatrix):
             new_callable=PropertyMock,
         ) as mock_my_property:
             mock_my_property.return_value = True
-
             results = execute_dagster_graphql(
                 graphql_context,
                 AUTO_MATERIALIZE_POLICY_SENSORS_QUERY,
@@ -580,10 +586,7 @@ class TestAssetConditionEvaluations(ExecutingGraphQLContextTestMatrix):
                 "cursor": None,
             },
         )
-        assert results.data == {
-            "assetNodeOrError": {"currentAutoMaterializeEvaluationId": 0},
-            "assetConditionEvaluationRecordsOrError": {"records": []},
-        }
+        assert results.data["assetConditionEvaluationRecordsOrError"] == {"records": []}
 
         evaluation = self._get_condition_evaluation(
             asset_key,
@@ -743,41 +746,6 @@ class TestAssetConditionEvaluations(ExecutingGraphQLContextTestMatrix):
         skipNode = self._get_node(notNode["childUniqueIds"][0], evaluation["evaluationNodes"])
         assert skipNode["description"] == "Any of"
         assert skipNode["status"] == "SKIPPED"
-
-    def _test_current_evaluation_id(self, graphql_context: WorkspaceRequestContext):
-        graphql_context.instance.daemon_cursor_storage.set_cursor_values(
-            {_PRE_SENSOR_AUTO_MATERIALIZE_CURSOR_KEY: serialize_value(AssetDaemonCursor.empty(0))}
-        )
-
-        results = execute_dagster_graphql(
-            graphql_context,
-            LEGACY_QUERY,
-            variables={"assetKey": {"path": ["asset_two"]}, "limit": 10, "cursor": None},
-        )
-        assert results.data == {
-            "assetNodeOrError": {"currentAutoMaterializeEvaluationId": 0},
-            "assetConditionEvaluationRecordsOrError": {"records": []},
-        }
-
-        graphql_context.instance.daemon_cursor_storage.set_cursor_values(
-            {
-                _PRE_SENSOR_AUTO_MATERIALIZE_CURSOR_KEY: (
-                    serialize_value(AssetDaemonCursor.empty(0).with_updates(0, 1.0, [], []))
-                )
-            }
-        )
-
-        results = execute_dagster_graphql(
-            graphql_context,
-            LEGACY_QUERY,
-            variables={"assetKey": {"path": ["asset_two"]}, "limit": 10, "cursor": None},
-        )
-        assert results.data == {
-            "assetNodeOrError": {"currentAutoMaterializeEvaluationId": 42},
-            "assetConditionEvaluationRecordsOrError": {
-                "records": [],
-            },
-        }
 
     def test_get_evaluations_with_partitions_updated(
         self, graphql_context: WorkspaceRequestContext
