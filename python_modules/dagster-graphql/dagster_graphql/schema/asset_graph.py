@@ -6,7 +6,7 @@ from dagster import (
     DagsterError,
     _check as check,
 )
-from dagster._core.definitions.asset_graph_differ import AssetGraphDiffer, ChangeReason
+from dagster._core.definitions.asset_graph_differ import AssetDefinitionChangeType, AssetGraphDiffer
 from dagster._core.definitions.asset_job import ASSET_BASE_JOB_PREFIX
 from dagster._core.definitions.data_time import CachingDataTimeResolver
 from dagster._core.definitions.data_version import (
@@ -103,7 +103,7 @@ GrapheneAssetStaleCauseCategory = graphene.Enum.from_enum(
     StaleCauseCategory, name="StaleCauseCategory"
 )
 
-GrapheneAssetChangedReason = graphene.Enum.from_enum(ChangeReason, name="ChangeReason")
+GrapheneAssetChangedReason = graphene.Enum.from_enum(AssetDefinitionChangeType, name="ChangeReason")
 
 
 class GrapheneUserAssetOwner(graphene.ObjectType):
@@ -1346,6 +1346,23 @@ class GrapheneAssetGroup(graphene.ObjectType):
 
     class Meta:
         name = "AssetGroup"
+
+
+class GrapheneCodeLocation(graphene.ObjectType):
+    class Meta:
+        name = "CodeLocation"
+
+    repositoryName = graphene.NonNull(graphene.String)
+    repositoryLocationName = graphene.NonNull(graphene.String)
+
+
+class GrapheneDefinitionGroup(graphene.ObjectType):
+    class Meta:
+        name = "DefinitionGroup"
+
+    groupName = graphene.NonNull(graphene.String)
+    repositoryName = graphene.NonNull(graphene.String)
+    repositoryLocationName = graphene.NonNull(graphene.String)
 
 
 class GrapheneAssetNodeOrError(graphene.Union):
