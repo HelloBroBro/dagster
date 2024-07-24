@@ -836,27 +836,35 @@ def test_merge():
     )
 
     merged = Definitions.merge(defs1, defs2)
-    assert merged.original_args == {
-        "assets": [asset1, asset2],
-        "jobs": [job1, job2],
-        "schedules": [schedule1, schedule2],
-        "sensors": [sensor1, sensor2],
-        "resources": {"resource1": resource1, "resource2": resource2},
-        "loggers": {"logger1": logger1, "logger2": logger2},
-        "executor": in_process_executor,
-        "asset_checks": [],
-    }
+    assert merged == Definitions(
+        assets=[asset1, asset2],
+        jobs=[job1, job2],
+        schedules=[schedule1, schedule2],
+        sensors=[sensor1, sensor2],
+        resources={"resource1": resource1, "resource2": resource2},
+        loggers={"logger1": logger1, "logger2": logger2},
+        executor=in_process_executor,
+        asset_checks=[],
+    )
 
 
 def test_resource_conflict_on_merge():
     defs1 = Definitions(resources={"resource1": 4})
-    defs2 = Definitions(resources={"resource1": 4})
+    defs2 = Definitions(resources={"resource1": 5})
 
     with pytest.raises(
         DagsterInvariantViolationError,
-        match="Definitions objects 0 and 1 both have a resource with key 'resource1'",
+        match="Definitions objects 0 and 1 have different resources with same key 'resource1'",
     ):
         Definitions.merge(defs1, defs2)
+
+
+def test_resource_conflict_on_merge_same_value():
+    defs1 = Definitions(resources={"resource1": 4})
+    defs2 = Definitions(resources={"resource1": 4})
+
+    merged = Definitions.merge(defs1, defs2)
+    assert merged.resources == {"resource1": 4}
 
 
 def test_logger_conflict_on_merge():
@@ -864,14 +872,30 @@ def test_logger_conflict_on_merge():
     def logger1(_):
         raise Exception("not executed")
 
+    @logger
+    def logger2(_):
+        raise Exception("also not executed")
+
     defs1 = Definitions(loggers={"logger1": logger1})
-    defs2 = Definitions(loggers={"logger1": logger1})
+    defs2 = Definitions(loggers={"logger1": logger2})
 
     with pytest.raises(
         DagsterInvariantViolationError,
-        match="Definitions objects 0 and 1 both have a logger with key 'logger1'",
+        match="Definitions objects 0 and 1 have different loggers with same key 'logger1'",
     ):
         Definitions.merge(defs1, defs2)
+
+
+def test_logger_conflict_on_merge_same_vlaue():
+    @logger
+    def logger1(_):
+        raise Exception("not executed")
+
+    defs1 = Definitions(loggers={"logger1": logger1})
+    defs2 = Definitions(loggers={"logger1": logger1})
+
+    merged = Definitions.merge(defs1, defs2)
+    assert merged.loggers == {"logger1": logger1}
 
 
 def test_executor_conflict_on_merge():
@@ -882,6 +906,13 @@ def test_executor_conflict_on_merge():
         DagsterInvariantViolationError, match="Definitions objects 0 and 1 both have an executor"
     ):
         Definitions.merge(defs1, defs2)
+
+
+def test_executor_conflict_on_merge_same_value():
+    defs1 = Definitions(executor=in_process_executor)
+    defs2 = Definitions(executor=in_process_executor)
+
+    assert Definitions.merge(defs1, defs2).executor == in_process_executor
 
 
 def test_get_all_asset_specs():
@@ -1022,8 +1053,8 @@ def test_definitions_dedupe_reference_equality():
     assert len(list(underlying_repo.schedule_defs)) == 1
 
     # properties on the definitions object do not dedupe
-    assert len(defs.original_args["assets"]) == 2
-    assert len(defs.original_args["asset_checks"]) == 2
-    assert len(defs.original_args["jobs"]) == 2
-    assert len(defs.original_args["sensors"]) == 2
-    assert len(defs.original_args["schedules"]) == 2
+    assert len(defs.assets) == 2
+    assert len(defs.asset_checks) == 2
+    assert len(defs.jobs) == 2
+    assert len(defs.sensors) == 2
+    assert len(defs.schedules) == 2
