@@ -2,10 +2,18 @@ import time
 from typing import cast
 
 import requests
-from dagster import JsonMetadataValue, MarkdownMetadataValue, SensorResult, build_sensor_context
+from dagster import (
+    AssetDep,
+    JsonMetadataValue,
+    MarkdownMetadataValue,
+    SensorResult,
+    build_sensor_context,
+)
 from dagster._core.definitions.asset_key import AssetKey
 from dagster._core.test_utils import instance_for_test
 from dagster_airlift import (
+    AirflowInstance,
+    BasicAuthBackend,
     TaskMapping,
     assets_defs_from_airflow_instance,
     build_airflow_polling_sensor,
@@ -14,22 +22,30 @@ from dagster_airlift import (
 
 def test_dag_peering(
     airflow_instance: None,
-    airflow_home_dir: str,
 ) -> None:
     """Test that dags can be correctly peered from airflow, and certain metadata properties are retained."""
-    assets_defs = assets_defs_from_airflow_instance(
+    instance = AirflowInstance(
         airflow_webserver_url="http://localhost:8080",
-        auth=("admin", "admin"),
-        instance_name="airflow_instance",
+        auth_backend=BasicAuthBackend(username="admin", password="admin"),
+        name="airflow_instance",
+    )
+    assets_defs = assets_defs_from_airflow_instance(
+        airflow_instance=instance,
         task_maps=[
             TaskMapping(
                 dag_id="print_dag",
                 task_id="print_task",
                 key=AssetKey(["some", "key"]),
-            )
+            ),
+            TaskMapping(
+                dag_id="print_dag",
+                task_id="downstream_print_task",
+                key=AssetKey(["other", "key"]),
+                deps=[AssetDep(AssetKey(["some", "key"]))],
+            ),
         ],
     )
-    assert len(assets_defs) == 2
+    assert len(assets_defs) == 3
     dag_def = [  # noqa
         assets_def
         for assets_def in assets_defs
@@ -54,8 +70,7 @@ def test_dag_peering(
     assert task_spec.metadata["Task ID"] == "print_task"
 
     sensor_def = build_airflow_polling_sensor(
-        airflow_webserver_url="http://localhost:8080",
-        auth=("admin", "admin"),
+        airflow_instance=instance,
         airflow_asset_specs=[list(assets_def.specs)[0] for assets_def in assets_defs],  # noqa
     )
 
@@ -83,7 +98,7 @@ def test_dag_peering(
         sensor_context = build_sensor_context(instance=instance)
         sensor_result = sensor_def(sensor_context)
         assert isinstance(sensor_result, SensorResult)
-        assert len(sensor_result.asset_events) == 2
+        assert len(sensor_result.asset_events) == 3
         dag_mat = [  # noqa
             asset_mat
             for asset_mat in sensor_result.asset_events
@@ -111,4 +126,17 @@ def test_dag_peering(
         run_id = task_mat.metadata["Airflow Run ID"].value
         assert task_mat.metadata["Link to Run"] == MarkdownMetadataValue(
             f"[View Run](http://localhost:8080/dags/print_dag/grid?dag_run_id={run_id}&tab=details)"
+        )
+
+        other_mat = [  # noqa
+            asset_mat
+            for asset_mat in sensor_result.asset_events
+            if asset_mat.asset_key == AssetKey(["other", "key"])
+        ][0]
+
+        assert other_mat
+        # other mat should be downstream of task mat
+        assert (  # type: ignore
+            other_mat.metadata["Creation Timestamp"].value
+            >= task_mat.metadata["Creation Timestamp"].value
         )
