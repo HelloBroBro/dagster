@@ -5,6 +5,11 @@
     "statusCode": 302
   },
   {
+    "source": "/concepts/assets/asset-auto-execution",
+    "destination": "/concepts/automation/declarative-automation",
+    "statusCode": 302
+  },
+  {
     "source": "/concepts/assets/software-defined-assets#recording-materialization-metadata",
     "destination": "/concepts/metadata-tags/asset-metadata",
     "statusCode": 302
@@ -732,6 +737,11 @@
   {
     "source": "/deployment/open-source",
     "destination": "/deployment",
+    "statusCode": 302
+  },
+  {
+    "source": "/_apidocs/libraries/dagster-airflow",
+    "destination": "/integrations/airflow",
     "statusCode": 302
   }
 ]
