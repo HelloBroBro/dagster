@@ -4,8 +4,8 @@ import * as React from 'react';
 import {useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState} from 'react';
 import {useRouteMatch} from 'react-router-dom';
 import {useSetRecoilState} from 'recoil';
-import {AssetCatalogTableBottomActionBar} from 'src/assets/AssetCatalogTableBottomActionBar.oss';
-import {useAssetCatalogFiltering} from 'src/assets/useAssetCatalogFiltering.oss';
+import {AssetCatalogTableBottomActionBar} from 'shared/assets/AssetCatalogTableBottomActionBar.oss';
+import {useAssetCatalogFiltering} from 'shared/assets/useAssetCatalogFiltering.oss';
 
 import {AssetTable} from './AssetTable';
 import {ASSET_TABLE_DEFINITION_FRAGMENT, ASSET_TABLE_FRAGMENT} from './AssetTableFragment';
@@ -91,7 +91,7 @@ export function useAllAssets({
   const fetchAssets = useCallback(async () => {
     try {
       const data = await fetchPaginatedData({
-        async fetchData(cursor: string | undefined) {
+        async fetchData(cursor: string | null | undefined) {
           const {data} = await client.query<
             AssetCatalogTableQuery,
             AssetCatalogTableQueryVariables
@@ -114,7 +114,7 @@ export function useAllAssets({
           }
           const assets = data.assetsOrError.nodes;
           const hasMoreData = assets.length === batchLimit;
-          const nextCursor = hasMoreData ? assets[assets.length - 1]!.id : undefined;
+          const nextCursor = data.assetsOrError.cursor;
           return {
             data: assets,
             cursor: nextCursor,
@@ -222,8 +222,6 @@ export const AssetsCatalogTable = ({
     leading: true,
   });
 
-  const loaded = !!assets;
-
   React.useEffect(() => {
     if (view !== 'directory' && prefixPath.length) {
       setView('directory');
@@ -291,6 +289,7 @@ export const ASSET_CATALOG_TABLE_QUERY = gql`
           id
           ...AssetTableFragment
         }
+        cursor
       }
       ...PythonErrorFragment
     }

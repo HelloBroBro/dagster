@@ -1,6 +1,7 @@
 import {Box} from '@dagster-io/ui-components';
 import {ReactNode} from 'react';
 import {useHistory} from 'react-router-dom';
+import {FeatureFlag} from 'shared/app/FeatureFlags.oss';
 
 import {TopNavLink} from './AppTopNav';
 import {
@@ -11,7 +12,7 @@ import {
   locationPathMatcher,
 } from './activePathMatchers';
 import {DeploymentStatusIcon} from '../../nav/DeploymentStatusIcon';
-import {FeatureFlag, featureEnabled} from '../Flags';
+import {featureEnabled} from '../Flags';
 import {ShortcutHandler} from '../ShortcutHandler';
 
 export type AppNavLinkType = {
@@ -113,7 +114,7 @@ export const navLinks = () => {
         </TopNavLink>
       ),
     };
-    return [overview, assets, jobs, automation, runs, deployment];
+    return [overview, runs, assets, jobs, automation, deployment];
   }
 
   const deployment = {
