@@ -570,6 +570,9 @@ class SensorDefinition(IHasInternalInit):
             This can be provided instead of specifying a job.
         target (Optional[Union[CoercibleToAssetSelection, AssetsDefinition, JobDefinition, UnresolvedAssetJobDefinition]]):
             The target that the sensor will execute.
+            It can take :py:class:`~dagster.AssetSelection` objects and anything coercible to it (e.g. `str`, `Sequence[str]`, `AssetKey`, `AssetsDefinition`).
+            It can also accept :py:class:`~dagster.JobDefinition` (a function decorated with `@job` is an instance of `JobDefinition`) and `UnresolvedAssetJobDefinition` (the return value of :py:func:`~dagster.define_asset_job`) objects.
+            This is an experimental parameter that will replace `job`, `jobs`, and `asset_selection`.
     """
 
     def with_updated_jobs(self, new_jobs: Sequence[ExecutableDefinition]) -> "SensorDefinition":
@@ -1005,16 +1008,6 @@ class SensorDefinition(IHasInternalInit):
                 )
 
             if run_request.partition_key and not run_request.has_resolved_partition():
-                if run_request.asset_selection:
-                    asset_graph = check.not_none(context.repository_def).asset_graph
-                    partitions_defs = {
-                        asset_graph.get(k).partitions_def for k in run_request.asset_selection
-                    }
-                    defined_partitions_defs = {pd for pd in partitions_defs if pd is not None}
-                    check.invariant(
-                        len({pd for pd in defined_partitions_defs if pd}) == 1,
-                        "All selected assets must have the same or no partitions definition",
-                    )
                 selected_job = _get_repo_job_by_name(
                     context, run_request.job_name if run_request.job_name else target_names[0]
                 )
@@ -1390,10 +1383,10 @@ def _run_requests_with_base_asset_jobs(
         else:
             asset_keys = outer_asset_selection.resolve(asset_graph)
 
-        base_job = check.not_none(context.repository_def).get_implicit_global_asset_job_def()
+        base_job = context.repository_def.get_implicit_job_def_for_assets(asset_keys)  # type: ignore  # (possible none)
         result.append(
             run_request.with_replaced_attrs(
-                job_name=base_job.name,
+                job_name=base_job.name,  # type: ignore  # (possible none)
                 asset_selection=list(asset_keys),
             )
         )

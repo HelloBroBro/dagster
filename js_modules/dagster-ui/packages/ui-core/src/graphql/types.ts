@@ -600,20 +600,6 @@ export type AssetSelection = {
   assetsOrError: AssetsOrError;
 };
 
-export type AssetSubset = {
-  __typename: 'AssetSubset';
-  assetKey: AssetKey;
-  subsetValue: AssetSubsetValue;
-};
-
-export type AssetSubsetValue = {
-  __typename: 'AssetSubsetValue';
-  boolValue: Maybe<Scalars['Boolean']['output']>;
-  isPartitioned: Scalars['Boolean']['output'];
-  partitionKeyRanges: Maybe<Array<PartitionKeyRange>>;
-  partitionKeys: Maybe<Array<Scalars['String']['output']>>;
-};
-
 export type AssetWipeMutationResult =
   | AssetNotFoundError
   | AssetWipeSuccess
@@ -700,14 +686,13 @@ export type AutoMaterializeRuleWithRuleEvaluations = {
 
 export type AutomationConditionEvaluationNode = {
   __typename: 'AutomationConditionEvaluationNode';
-  candidateSubset: Maybe<AssetSubset>;
   childUniqueIds: Array<Scalars['String']['output']>;
   endTimestamp: Maybe<Scalars['Float']['output']>;
   expandedLabel: Array<Scalars['String']['output']>;
   isPartitioned: Scalars['Boolean']['output'];
+  numCandidates: Maybe<Scalars['Int']['output']>;
   numTrue: Scalars['Int']['output'];
   startTimestamp: Maybe<Scalars['Float']['output']>;
-  trueSubset: AssetSubset;
   uniqueId: Scalars['String']['output'];
   userLabel: Maybe<Scalars['String']['output']>;
 };
@@ -1877,11 +1862,6 @@ export type InputMapping = {
   __typename: 'InputMapping';
   definition: InputDefinition;
   mappedInput: Input;
-};
-
-export type InputTag = {
-  name: Scalars['String']['input'];
-  value: Scalars['String']['input'];
 };
 
 export type Instance = {
@@ -3280,15 +3260,12 @@ export type PartitionTagsOrError = PartitionTags | PythonError;
 
 export type PartitionedAssetConditionEvaluationNode = {
   __typename: 'PartitionedAssetConditionEvaluationNode';
-  candidateSubset: Maybe<AssetSubset>;
   childUniqueIds: Array<Scalars['String']['output']>;
   description: Scalars['String']['output'];
   endTimestamp: Maybe<Scalars['Float']['output']>;
-  numFalse: Maybe<Scalars['Int']['output']>;
-  numSkipped: Maybe<Scalars['Int']['output']>;
+  numCandidates: Maybe<Scalars['Int']['output']>;
   numTrue: Scalars['Int']['output'];
   startTimestamp: Maybe<Scalars['Float']['output']>;
-  trueSubset: AssetSubset;
   uniqueId: Scalars['String']['output'];
 };
 
@@ -3719,6 +3696,7 @@ export type Query = {
   shouldShowNux: Scalars['Boolean']['output'];
   test: Maybe<TestFields>;
   topLevelResourceDetailsOrError: ResourceDetailsOrError;
+  truePartitionsForAutomationConditionEvaluationNode: Array<Scalars['String']['output']>;
   utilizedEnvVarsOrError: EnvVarWithConsumersOrError;
   version: Scalars['String']['output'];
   workspaceLocationEntryOrError: Maybe<WorkspaceLocationEntryOrError>;
@@ -3948,6 +3926,12 @@ export type QuerySensorsOrErrorArgs = {
 
 export type QueryTopLevelResourceDetailsOrErrorArgs = {
   resourceSelector: ResourceSelector;
+};
+
+export type QueryTruePartitionsForAutomationConditionEvaluationNodeArgs = {
+  assetKey: AssetKeyInput;
+  evaluationId: Scalars['Int']['input'];
+  nodeUniqueId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type QueryUtilizedEnvVarsOrErrorArgs = {
@@ -5298,6 +5282,11 @@ export type TableSchemaMetadataEntry = MetadataEntry & {
   description: Maybe<Scalars['String']['output']>;
   label: Scalars['String']['output'];
   schema: TableSchema;
+};
+
+export type TagInput = {
+  key: Scalars['String']['input'];
+  value: Scalars['String']['input'];
 };
 
 export type Target = {
@@ -6668,49 +6657,6 @@ export const buildAssetSelection = (
   };
 };
 
-export const buildAssetSubset = (
-  overrides?: Partial<AssetSubset>,
-  _relationshipsToOmit: Set<string> = new Set(),
-): {__typename: 'AssetSubset'} & AssetSubset => {
-  const relationshipsToOmit: Set<string> = new Set(_relationshipsToOmit);
-  relationshipsToOmit.add('AssetSubset');
-  return {
-    __typename: 'AssetSubset',
-    assetKey:
-      overrides && overrides.hasOwnProperty('assetKey')
-        ? overrides.assetKey!
-        : relationshipsToOmit.has('AssetKey')
-        ? ({} as AssetKey)
-        : buildAssetKey({}, relationshipsToOmit),
-    subsetValue:
-      overrides && overrides.hasOwnProperty('subsetValue')
-        ? overrides.subsetValue!
-        : relationshipsToOmit.has('AssetSubsetValue')
-        ? ({} as AssetSubsetValue)
-        : buildAssetSubsetValue({}, relationshipsToOmit),
-  };
-};
-
-export const buildAssetSubsetValue = (
-  overrides?: Partial<AssetSubsetValue>,
-  _relationshipsToOmit: Set<string> = new Set(),
-): {__typename: 'AssetSubsetValue'} & AssetSubsetValue => {
-  const relationshipsToOmit: Set<string> = new Set(_relationshipsToOmit);
-  relationshipsToOmit.add('AssetSubsetValue');
-  return {
-    __typename: 'AssetSubsetValue',
-    boolValue: overrides && overrides.hasOwnProperty('boolValue') ? overrides.boolValue! : false,
-    isPartitioned:
-      overrides && overrides.hasOwnProperty('isPartitioned') ? overrides.isPartitioned! : false,
-    partitionKeyRanges:
-      overrides && overrides.hasOwnProperty('partitionKeyRanges')
-        ? overrides.partitionKeyRanges!
-        : [],
-    partitionKeys:
-      overrides && overrides.hasOwnProperty('partitionKeys') ? overrides.partitionKeys! : [],
-  };
-};
-
 export const buildAssetWipeSuccess = (
   overrides?: Partial<AssetWipeSuccess>,
   _relationshipsToOmit: Set<string> = new Set(),
@@ -6880,12 +6826,6 @@ export const buildAutomationConditionEvaluationNode = (
   relationshipsToOmit.add('AutomationConditionEvaluationNode');
   return {
     __typename: 'AutomationConditionEvaluationNode',
-    candidateSubset:
-      overrides && overrides.hasOwnProperty('candidateSubset')
-        ? overrides.candidateSubset!
-        : relationshipsToOmit.has('AssetSubset')
-        ? ({} as AssetSubset)
-        : buildAssetSubset({}, relationshipsToOmit),
     childUniqueIds:
       overrides && overrides.hasOwnProperty('childUniqueIds') ? overrides.childUniqueIds! : [],
     endTimestamp:
@@ -6894,15 +6834,11 @@ export const buildAutomationConditionEvaluationNode = (
       overrides && overrides.hasOwnProperty('expandedLabel') ? overrides.expandedLabel! : [],
     isPartitioned:
       overrides && overrides.hasOwnProperty('isPartitioned') ? overrides.isPartitioned! : true,
+    numCandidates:
+      overrides && overrides.hasOwnProperty('numCandidates') ? overrides.numCandidates! : 6123,
     numTrue: overrides && overrides.hasOwnProperty('numTrue') ? overrides.numTrue! : 5212,
     startTimestamp:
       overrides && overrides.hasOwnProperty('startTimestamp') ? overrides.startTimestamp! : 5.42,
-    trueSubset:
-      overrides && overrides.hasOwnProperty('trueSubset')
-        ? overrides.trueSubset!
-        : relationshipsToOmit.has('AssetSubset')
-        ? ({} as AssetSubset)
-        : buildAssetSubset({}, relationshipsToOmit),
     uniqueId: overrides && overrides.hasOwnProperty('uniqueId') ? overrides.uniqueId! : 'sit',
     userLabel:
       overrides && overrides.hasOwnProperty('userLabel') ? overrides.userLabel! : 'dolorem',
@@ -8689,18 +8625,6 @@ export const buildInputMapping = (
         : relationshipsToOmit.has('Input')
         ? ({} as Input)
         : buildInput({}, relationshipsToOmit),
-  };
-};
-
-export const buildInputTag = (
-  overrides?: Partial<InputTag>,
-  _relationshipsToOmit: Set<string> = new Set(),
-): InputTag => {
-  const relationshipsToOmit: Set<string> = new Set(_relationshipsToOmit);
-  relationshipsToOmit.add('InputTag');
-  return {
-    name: overrides && overrides.hasOwnProperty('name') ? overrides.name! : 'possimus',
-    value: overrides && overrides.hasOwnProperty('value') ? overrides.value! : 'quod',
   };
 };
 
@@ -11075,29 +10999,17 @@ export const buildPartitionedAssetConditionEvaluationNode = (
   relationshipsToOmit.add('PartitionedAssetConditionEvaluationNode');
   return {
     __typename: 'PartitionedAssetConditionEvaluationNode',
-    candidateSubset:
-      overrides && overrides.hasOwnProperty('candidateSubset')
-        ? overrides.candidateSubset!
-        : relationshipsToOmit.has('AssetSubset')
-        ? ({} as AssetSubset)
-        : buildAssetSubset({}, relationshipsToOmit),
     childUniqueIds:
       overrides && overrides.hasOwnProperty('childUniqueIds') ? overrides.childUniqueIds! : [],
     description:
       overrides && overrides.hasOwnProperty('description') ? overrides.description! : 'quam',
     endTimestamp:
       overrides && overrides.hasOwnProperty('endTimestamp') ? overrides.endTimestamp! : 9.74,
-    numFalse: overrides && overrides.hasOwnProperty('numFalse') ? overrides.numFalse! : 4729,
-    numSkipped: overrides && overrides.hasOwnProperty('numSkipped') ? overrides.numSkipped! : 5678,
+    numCandidates:
+      overrides && overrides.hasOwnProperty('numCandidates') ? overrides.numCandidates! : 9986,
     numTrue: overrides && overrides.hasOwnProperty('numTrue') ? overrides.numTrue! : 3015,
     startTimestamp:
       overrides && overrides.hasOwnProperty('startTimestamp') ? overrides.startTimestamp! : 5.96,
-    trueSubset:
-      overrides && overrides.hasOwnProperty('trueSubset')
-        ? overrides.trueSubset!
-        : relationshipsToOmit.has('AssetSubset')
-        ? ({} as AssetSubset)
-        : buildAssetSubset({}, relationshipsToOmit),
     uniqueId: overrides && overrides.hasOwnProperty('uniqueId') ? overrides.uniqueId! : 'sed',
   };
 };
@@ -12062,6 +11974,10 @@ export const buildQuery = (
         : relationshipsToOmit.has('PythonError')
         ? ({} as PythonError)
         : buildPythonError({}, relationshipsToOmit),
+    truePartitionsForAutomationConditionEvaluationNode:
+      overrides && overrides.hasOwnProperty('truePartitionsForAutomationConditionEvaluationNode')
+        ? overrides.truePartitionsForAutomationConditionEvaluationNode!
+        : [],
     utilizedEnvVarsOrError:
       overrides && overrides.hasOwnProperty('utilizedEnvVarsOrError')
         ? overrides.utilizedEnvVarsOrError!
@@ -14542,6 +14458,18 @@ export const buildTableSchemaMetadataEntry = (
         : relationshipsToOmit.has('TableSchema')
         ? ({} as TableSchema)
         : buildTableSchema({}, relationshipsToOmit),
+  };
+};
+
+export const buildTagInput = (
+  overrides?: Partial<TagInput>,
+  _relationshipsToOmit: Set<string> = new Set(),
+): TagInput => {
+  const relationshipsToOmit: Set<string> = new Set(_relationshipsToOmit);
+  relationshipsToOmit.add('TagInput');
+  return {
+    key: overrides && overrides.hasOwnProperty('key') ? overrides.key! : 'ut',
+    value: overrides && overrides.hasOwnProperty('value') ? overrides.value! : 'nostrum',
   };
 };
 
