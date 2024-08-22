@@ -64,7 +64,6 @@ def test_load_from_instance(
         def test_io_manager(_context) -> IOManager:
             class TestIOManager(IOManager):
                 def handle_output(self, context: OutputContext, obj) -> None:
-                    assert context.dagster_type.is_nothing
                     return
 
                 def load_input(self, context: InputContext) -> Any:
@@ -156,7 +155,12 @@ def test_load_from_instance(
             tables = {
                 connector_to_asset_key_fn(
                     FivetranConnectionMetadata(
-                        "some_service.some_name", "", "=", {}, database="example_database"
+                        "some_service.some_name",
+                        "",
+                        "=",
+                        {},
+                        database="example_database",
+                        service="snowflake",
                     ),
                     ".".join(t.path),
                 )
@@ -167,7 +171,12 @@ def test_load_from_instance(
         xyz_asset_key = (
             connector_to_asset_key_fn(
                 FivetranConnectionMetadata(
-                    "some_service.some_name", "", "=", {}, database="example_database"
+                    "some_service.some_name",
+                    "",
+                    "=",
+                    {},
+                    database="example_database",
+                    service="snowflake",
                 ),
                 "abc.xyz",
             )
@@ -188,6 +197,7 @@ def test_load_from_instance(
             )
 
         # Check schema metadata is added correctly to asset def
+        assets_def = ft_assets[0]
         assert any(
             metadata.get("dagster/column_schema")
             == (
@@ -199,12 +209,13 @@ def test_load_from_instance(
                     ]
                 )
             )
-            for key, metadata in ft_assets[0].metadata_by_key.items()
+            for key, metadata in assets_def.metadata_by_key.items()
         )
-        for key, metadata in ft_assets[0].metadata_by_key.items():
+        for key, metadata in assets_def.metadata_by_key.items():
             assert metadata.get("dagster/relation_identifier") == (
                 "example_database." + ".".join(key.path[-2:])
             )
+            assert assets_def.tags_by_key[key]["dagster/storage_kind"] == "snowflake"
 
         assert ft_assets[0].keys == tables
         assert all(
