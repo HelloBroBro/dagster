@@ -1,10 +1,25 @@
-from dagster_airlift.core import AirflowInstance, BasicAuthBackend, build_defs_from_airflow_instance
-from dagster_airlift.core.def_factory import defs_from_factories
-from dagster_airlift.dbt import DbtProjectDefs
+from datetime import timedelta
 
-from dbt_example.dagster_defs.csv_to_duckdb_defs import CSVToDuckdbDefs
+from dagster import build_last_update_freshness_checks, build_sensor_for_freshness_checks
+from dagster_airlift.core import (
+    AirflowInstance,
+    BasicAuthBackend,
+    build_defs_from_airflow_instance,
+    combine_defs,
+)
+from dagster_airlift.dbt import specs_from_airflow_dbt
 
-from .constants import AIRFLOW_BASE_URL, AIRFLOW_INSTANCE_NAME, PASSWORD, USERNAME, dbt_project_path
+from dbt_example.dagster_defs.lakehouse import lakehouse_existence_check, specs_from_lakehouse
+from dbt_example.shared.load_iris import CSV_PATH, DB_PATH
+
+from .constants import (
+    AIRFLOW_BASE_URL,
+    AIRFLOW_INSTANCE_NAME,
+    DBT_DAG_ASSET_KEY,
+    PASSWORD,
+    USERNAME,
+    dbt_manifest_path,
+)
 
 airflow_instance = AirflowInstance(
     auth_backend=BasicAuthBackend(
@@ -13,18 +28,33 @@ airflow_instance = AirflowInstance(
     name=AIRFLOW_INSTANCE_NAME,
 )
 
-
+# We expect the dbt dag to have completed within an hour of 9:00 AM every day
+dbt_freshness_checks = build_last_update_freshness_checks(
+    assets=[DBT_DAG_ASSET_KEY],
+    lower_bound_delta=timedelta(hours=1),
+    deadline_cron="0 9 * * *",
+)
+freshness_sensor = build_sensor_for_freshness_checks(
+    freshness_checks=dbt_freshness_checks,
+)
 defs = build_defs_from_airflow_instance(
     airflow_instance=airflow_instance,
-    orchestrated_defs=defs_from_factories(
-        CSVToDuckdbDefs(
-            name="load_lakehouse__load_iris",
-            table_name="iris_lakehouse_table",
-            duckdb_schema="iris_dataset",
+    defs=combine_defs(
+        *specs_from_lakehouse(
+            dag_id="load_lakehouse",
+            task_id="load_iris",
+            csv_path=CSV_PATH,
         ),
-        DbtProjectDefs(
-            name="dbt_dag__build_dbt_models",
-            dbt_manifest=dbt_project_path() / "target" / "manifest.json",
+        *specs_from_airflow_dbt(
+            dag_id="dbt_dag",
+            task_id="build_dbt_models",
+            manifest=dbt_manifest_path(),
         ),
+        lakehouse_existence_check(
+            csv_path=CSV_PATH,
+            duckdb_path=DB_PATH,
+        ),
+        *dbt_freshness_checks,
+        freshness_sensor,
     ),
 )

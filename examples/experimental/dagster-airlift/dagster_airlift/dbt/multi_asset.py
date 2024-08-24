@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
-from dagster import AssetExecutionContext, Definitions, multi_asset
+from dagster import AssetExecutionContext, AssetSpec, Definitions, multi_asset
 from dagster_dbt import (
     DagsterDbtTranslator,
+    DagsterDbtTranslatorSettings,
     DbtCliResource,
     DbtProject,
     build_dbt_asset_specs,
@@ -12,6 +13,7 @@ from dagster_dbt import (
 from dagster_dbt.dbt_manifest import DbtManifestParam, validate_manifest
 
 from dagster_airlift.core import DefsFactory
+from dagster_airlift.core.utils import DAG_ID_TAG, TASK_ID_TAG
 
 
 @dataclass
@@ -41,14 +43,12 @@ class DbtProjectDefs(DefsFactory):
         self,
         dbt_manifest: DbtManifestParam,
         name: str,
-        translator: Optional[DagsterDbtTranslator] = None,
         select: str = "fqn:*",
         exclude: Optional[str] = None,
         project: Optional[DbtProject] = None,
     ):
         self.dbt_manifest = validate_manifest(dbt_manifest)
         self.name = name
-        self.translator = translator
         self.select = select
         self.exclude = exclude
         self.project = project
@@ -60,7 +60,6 @@ class DbtProjectDefs(DefsFactory):
                 name=self.name,
                 specs=build_dbt_asset_specs(
                     manifest=self.dbt_manifest,
-                    dagster_dbt_translator=self.translator,
                     select=self.select,
                     exclude=self.exclude,
                     project=self.project,
@@ -78,7 +77,9 @@ class DbtProjectDefs(DefsFactory):
                 manifest=self.dbt_manifest,
                 name=self.name,
                 project=self.project,
-                dagster_dbt_translator=self.translator,
+                dagster_dbt_translator=DagsterDbtTranslator(
+                    settings=DagsterDbtTranslatorSettings(enable_asset_checks=False)
+                ),
                 select=self.select,
                 exclude=self.exclude,
             )
@@ -89,3 +90,38 @@ class DbtProjectDefs(DefsFactory):
                 assets=[_dbt_asset],
                 resources={"dbt": DbtCliResource(project_dir=self.project)},
             )
+
+
+def specs_from_airflow_dbt(
+    *, dag_id: str, task_id: str, manifest: DbtManifestParam
+) -> Sequence[AssetSpec]:
+    return [
+        spec._replace(tags={DAG_ID_TAG: dag_id, TASK_ID_TAG: task_id, **spec.tags})
+        for spec in build_dbt_asset_specs(
+            manifest=manifest,
+        )
+    ]
+
+
+def defs_from_airflow_dbt(
+    *,
+    dag_id: str,
+    task_id: str,
+    manifest: DbtManifestParam,
+    project: DbtProject,
+) -> Definitions:
+    @dbt_assets(
+        manifest=manifest,
+        project=project,
+        op_tags={DAG_ID_TAG: dag_id, TASK_ID_TAG: task_id},
+        dagster_dbt_translator=DagsterDbtTranslator(
+            settings=DagsterDbtTranslatorSettings(enable_asset_checks=False)
+        ),
+    )
+    def _dbt_asset(context: AssetExecutionContext, dbt: DbtCliResource):
+        yield from dbt.cli(["build"], context=context).stream()
+
+    return Definitions(
+        assets=[_dbt_asset],
+        resources={"dbt": DbtCliResource(project_dir=project)},
+    )

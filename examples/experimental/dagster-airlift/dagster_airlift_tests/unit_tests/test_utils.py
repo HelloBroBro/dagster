@@ -1,6 +1,7 @@
 import pytest
-from dagster import AssetKey, AssetSpec, asset, multi_asset
+from dagster import AssetKey, AssetSpec, Definitions, asset, asset_check, multi_asset
 from dagster._check.functions import CheckError
+from dagster_airlift.core import combine_defs, specs_from_task
 from dagster_airlift.core.utils import get_dag_id_from_asset, get_task_id_from_asset
 
 
@@ -145,3 +146,42 @@ def test_op_tag_name_mismatch() -> None:
 
     with pytest.raises(CheckError):
         get_task_id_from_asset(other_dag__other_task)
+
+
+def test_specs_to_tasks() -> None:
+    """Tests basic conversion of specs to tasks."""
+    specs = ["1", AssetSpec(key=AssetKey(["2"]))]
+    defs = specs_from_task(task_id="task", dag_id="dag", assets=specs)
+    assert all(isinstance(_def, AssetSpec) for _def in defs)
+    assert len(list(defs)) == 2
+    spec = next(iter(defs))
+    assert spec.tags["airlift/dag_id"] == "dag"
+
+
+def test_combine_defs() -> None:
+    """Tests functionality of combine_defs."""
+
+    @asset
+    def a():
+        pass
+
+    @asset
+    def b():
+        pass
+
+    @asset
+    def c():
+        pass
+
+    @asset_check(asset=a.key)
+    def the_check():
+        pass
+
+    b_defs = Definitions(assets=[b])
+    c_defs = Definitions(assets=[c])
+
+    defs = combine_defs(a, the_check, b_defs, c_defs)
+    assert defs.assets
+    assert len(list(defs.assets)) == 3
+    assert defs.asset_checks
+    assert len(list(defs.asset_checks)) == 1
