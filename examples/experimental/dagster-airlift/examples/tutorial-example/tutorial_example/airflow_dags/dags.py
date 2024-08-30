@@ -70,7 +70,6 @@ class ExportDuckDBToCSV(BaseOperator):
                 table_name=self._table_name,
                 csv_path=self._csv_path,
                 duckdb_path=self._duckdb_path,
-                duckdb_schema=self._duckdb_schema,
                 duckdb_database_name=self._duckdb_database_name,
             )
         )
@@ -85,7 +84,12 @@ default_args = {
 }
 DBT_DIR = os.getenv("TUTORIAL_DBT_PROJECT_DIR")
 # Create the DAG with the specified schedule interval
-dag = DAG("rebuild_customers_list", default_args=default_args, schedule_interval=None)
+dag = DAG(
+    "rebuild_customers_list",
+    default_args=default_args,
+    schedule_interval=None,
+    is_paused_upon_creation=False,
+)
 
 
 load_raw_customers = LoadCSVToDuckDB(
@@ -113,13 +117,13 @@ export_customers = ExportDuckDBToCSV(
     duckdb_path=Path(os.environ["AIRFLOW_HOME"]) / "jaffle_shop.duckdb",
     duckdb_database_name="jaffle_shop",
     table_name="customers",
-    csv_path=Path(__file__).parent / "customers.csv",
+    csv_path=Path(os.environ["TUTORIAL_EXAMPLE_DIR"]) / "customers.csv",
 )
 
 load_raw_customers >> run_dbt_model >> export_customers  # type: ignore
 
 # Set this to True to begin the migration process
-MIGRATING = True
+MIGRATING = False
 
 if MIGRATING:
     mark_as_dagster_migrating(
