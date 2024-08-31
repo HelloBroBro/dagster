@@ -11,18 +11,27 @@ gRPC
 REST API
 [Ss]ubprocess
 Serverless
+CLI[s]
+uncomment
 
 Airbyte
 AirFlow
+AWS
 BigQuery
 Crontab
 Databricks
 Datadog
 Dockerfile
 dbt
+dlt
 DuckDB
+ECR
+ECS
+Fivetran
+GCR
 GitHub
-Gitlab
+GitLab
+IAM
 Microsoft Teams
 MLflow
 MongoDB
@@ -35,8 +44,13 @@ Pandera
 PingOne
 Postgres
 S3
+SCIM
 Snowflake
 Twilio
+PEX
+Helm
+Dockerfile
+Docker
 
 We have
 we have
@@ -47,3 +61,12 @@ DSL
 plaintext
 vCPU
 vCPUs
+SAML
+
+Tensorflow
+JavaScript
+stdout
+stderr
+
+enqueue[ds]
+auditable
