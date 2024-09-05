@@ -25,8 +25,9 @@ from dagster._core.utils import toposort_flatten
 from dagster._record import record
 from dagster._time import datetime_from_timestamp, get_current_datetime, get_current_timestamp
 
-from .airflow_instance import AirflowInstance, TaskInstance
-from .utils import MIGRATED_TAG, get_dag_id_from_asset, get_task_id_from_asset
+from dagster_airlift.constants import MIGRATED_TAG
+from dagster_airlift.core.airflow_instance import AirflowInstance, TaskInstance
+from dagster_airlift.core.utils import get_dag_id_from_asset, get_task_id_from_asset
 
 
 def build_airflow_polling_sensor(
@@ -36,8 +37,8 @@ def build_airflow_polling_sensor(
         name="airflow_dag_status_sensor",
         minimum_interval_seconds=1,
         default_status=DefaultSensorStatus.RUNNING,
-        # Tracking bug around this here: https://linear.app/dagster-labs/issue/FOU-376/make-airflow-polling-sensor-work-with-asset-selection=
-        asset_selection=AssetSelection.assets(),
+        # This sensor will only ever execute asset checks and not asset materializations.
+        asset_selection=AssetSelection.all_asset_checks(),
     )
     def airflow_dag_sensor(context: SensorEvaluationContext) -> SensorResult:
         """Sensor to report materialization events for each asset as new runs come in."""
@@ -117,9 +118,7 @@ def build_airflow_polling_sensor(
         context.update_cursor(str(current_date.timestamp()))
         return SensorResult(
             asset_events=[sorted_mat[1] for sorted_mat in sorted_mats],
-            run_requests=[
-                RunRequest(asset_check_keys=list(asset_check_keys_to_request), asset_selection=[])
-            ]
+            run_requests=[RunRequest(asset_check_keys=list(asset_check_keys_to_request))]
             if asset_check_keys_to_request
             else None,
         )
