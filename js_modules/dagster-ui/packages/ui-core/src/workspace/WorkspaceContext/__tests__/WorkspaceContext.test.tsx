@@ -20,12 +20,14 @@ import {
 import {getMockResultFn} from '../../../testing/mocking';
 import {
   CODE_LOCATION_STATUS_QUERY_KEY,
-  CODE_LOCATION_STATUS_QUERY_VERSION,
-  LOCATION_WORKSPACE_QUERY_VERSION,
   WorkspaceContext,
   WorkspaceProvider,
 } from '../WorkspaceContext';
 import {buildWorkspaceMocks} from '../__fixtures__/Workspace.fixtures';
+import {
+  CodeLocationStatusQueryVersion,
+  LocationWorkspaceQueryVersion,
+} from '../types/WorkspaceQueries.types';
 import {locationWorkspaceKey, repoLocationToRepos} from '../util';
 
 const mockCache = cache as any;
@@ -92,17 +94,20 @@ function getLocationMocks(updatedTimestamp = 0) {
   const location1 = buildWorkspaceLocationEntry({
     name: 'location1',
     updatedTimestamp,
+    versionKey: String(updatedTimestamp),
     locationOrLoadError: repositoryLocation1,
   });
   const location2 = buildWorkspaceLocationEntry({
     name: 'location2',
     updatedTimestamp,
+    versionKey: String(updatedTimestamp),
     locationOrLoadError: repositoryLocation2,
   });
 
   const location3 = buildWorkspaceLocationEntry({
     name: 'location3',
     updatedTimestamp,
+    versionKey: String(updatedTimestamp),
     locationOrLoadError: repositoryLocation3,
   });
 
@@ -213,19 +218,19 @@ describe('WorkspaceContext', () => {
 
     caches.codeLocationStatusQuery.has.mockResolvedValue(true);
     caches.codeLocationStatusQuery.get.mockResolvedValue({
-      value: {data: (mocks[0]! as any).result.data, version: CODE_LOCATION_STATUS_QUERY_VERSION},
+      value: {data: (mocks[0]! as any).result.data, version: CodeLocationStatusQueryVersion},
     });
     caches.location1.has.mockResolvedValue(true);
     caches.location1.get.mockResolvedValue({
-      value: {data: (mocks[1]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[1]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     caches.location2.has.mockResolvedValue(true);
     caches.location2.get.mockResolvedValue({
-      value: {data: (mocks[2]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[2]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     caches.location3.has.mockResolvedValue(true);
     caches.location3.get.mockResolvedValue({
-      value: {data: (mocks[3]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[3]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
 
     const mockCbs = mocks.map(getMockResultFn);
@@ -287,19 +292,19 @@ describe('WorkspaceContext', () => {
 
     caches.codeLocationStatusQuery.has.mockResolvedValue(true);
     caches.codeLocationStatusQuery.get.mockResolvedValue({
-      value: {data: (mocks[0]! as any).result.data, version: CODE_LOCATION_STATUS_QUERY_VERSION},
+      value: {data: (mocks[0]! as any).result.data, version: CodeLocationStatusQueryVersion},
     });
     caches.location1.has.mockResolvedValue(true);
     caches.location1.get.mockResolvedValue({
-      value: {data: (mocks[1]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[1]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     caches.location2.has.mockResolvedValue(true);
     caches.location2.get.mockResolvedValue({
-      value: {data: (mocks[2]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[2]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     caches.location3.has.mockResolvedValue(true);
     caches.location3.get.mockResolvedValue({
-      value: {data: (mocks[3]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[3]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     const mockCbs = updatedMocks.map(getMockResultFn);
 
@@ -361,19 +366,19 @@ describe('WorkspaceContext', () => {
 
     caches.codeLocationStatusQuery.has.mockResolvedValue(true);
     caches.codeLocationStatusQuery.get.mockResolvedValue({
-      value: {data: (mocks[0]! as any).result.data, version: CODE_LOCATION_STATUS_QUERY_VERSION},
+      value: {data: (mocks[0]! as any).result.data, version: CodeLocationStatusQueryVersion},
     });
     caches.location1.has.mockResolvedValue(true);
     caches.location1.get.mockResolvedValue({
-      value: {data: (mocks[1]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[1]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     caches.location2.has.mockResolvedValue(true);
     caches.location2.get.mockResolvedValue({
-      value: {data: (mocks[2]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[2]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     caches.location3.has.mockResolvedValue(true);
     caches.location3.get.mockResolvedValue({
-      value: {data: (mocks[3]! as any).result.data, version: LOCATION_WORKSPACE_QUERY_VERSION},
+      value: {data: (mocks[3]! as any).result.data, version: LocationWorkspaceQueryVersion},
     });
     const mockCbs = updatedMocks.map(getMockResultFn);
 
