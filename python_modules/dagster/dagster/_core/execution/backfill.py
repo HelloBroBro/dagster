@@ -18,6 +18,9 @@ from dagster._core.execution.asset_backfill import (
 )
 from dagster._core.execution.bulk_actions import BulkActionType
 from dagster._core.instance import DynamicPartitionsStore
+from dagster._core.remote_representation.external_data import (
+    job_name_for_external_partition_set_name,
+)
 from dagster._core.remote_representation.origin import RemotePartitionSetOrigin
 from dagster._core.storage.tags import USER_TAG
 from dagster._core.workspace.workspace import IWorkspace
@@ -55,12 +58,17 @@ class BulkActionsFilter:
         created_before (Optional[DateTime]): Filter by bulk actions that were created before this datetime. Note that the
             create_time for each bulk action is stored in UTC.
         created_after (Optional[DateTime]): Filter by bulk actions that were created after this datetime. Note that the
-            create_time for each bulk action is stored in UTC.
+            create_time for each bulk action is stored in UTC.t
+        tags (Optional[Dict[str, Union[str, List[str]]]]):
+            A dictionary of tags to query by. All tags specified here must be present for a given bulk action to pass the filter.
+        job_name (Optional[str]): Name of the job to query for. If blank, all job_names will be accepted.
     """
 
     statuses: Optional[Sequence[BulkActionStatus]] = None
     created_before: Optional[datetime] = None
     created_after: Optional[datetime] = None
+    tags: Optional[Mapping[str, Union[str, Sequence[str]]]] = None
+    job_name: Optional[str] = None
 
 
 @whitelist_for_serdes
@@ -198,6 +206,16 @@ class PartitionBackfill(
             return None
 
         return self.partition_set_origin.partition_set_name
+
+    @property
+    def job_name(self) -> Optional[str]:
+        if self.is_asset_backfill:
+            return None
+        return (
+            job_name_for_external_partition_set_name(self.partition_set_name)
+            if self.partition_set_name
+            else None
+        )
 
     @property
     def log_storage_prefix(self) -> Sequence[str]:
