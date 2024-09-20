@@ -19,275 +19,272 @@ from typing import (
 
 import dagster._check as check
 from dagster import PartitionKeyRange
-from dagster._core.asset_graph_view.asset_graph_view import AssetGraphView, TemporalContext
+from dagster._core.asset_graph_view.entity_subset import EntitySubset
 from dagster._core.definitions.asset_daemon_cursor import AssetDaemonCursor
 from dagster._core.definitions.asset_graph_subset import AssetGraphSubset
-from dagster._core.definitions.auto_materialize_policy import AutoMaterializePolicy
-from dagster._core.definitions.auto_materialize_rule import AutoMaterializeRule
+from dagster._core.definitions.asset_key import AssetCheckKey, EntityKey
+from dagster._core.definitions.asset_selection import AssetSelection
 from dagster._core.definitions.backfill_policy import BackfillPolicy, BackfillPolicyType
 from dagster._core.definitions.base_asset_graph import BaseAssetGraph
-from dagster._core.definitions.data_time import CachingDataTimeResolver
-from dagster._core.definitions.data_version import CachingStaleStatusResolver
 from dagster._core.definitions.declarative_automation.automation_condition import AutomationResult
+from dagster._core.definitions.declarative_automation.automation_condition_evaluator import (
+    AutomationConditionEvaluator,
+)
 from dagster._core.definitions.declarative_automation.serialized_objects import (
     AutomationConditionEvaluation,
 )
 from dagster._core.definitions.events import AssetKey, AssetKeyPartitionKey
-from dagster._core.definitions.partition import PartitionsDefinition, ScheduleType
+from dagster._core.definitions.partition import PartitionsDefinition
 from dagster._core.definitions.run_request import RunRequest
-from dagster._core.definitions.time_window_partitions import get_time_partitions_def
 from dagster._core.instance import DynamicPartitionsStore
 from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_END_TAG,
     ASSET_PARTITION_RANGE_START_TAG,
 )
-from dagster._time import get_current_timestamp
 
 if TYPE_CHECKING:
     from dagster._core.instance import DagsterInstance
-    from dagster._utils.caching_instance_queryer import CachingInstanceQueryer  # expensive import
 
 
-def get_implicit_auto_materialize_policy(
-    asset_key: AssetKey, asset_graph: BaseAssetGraph
-) -> Optional[AutoMaterializePolicy]:
-    """For backcompat with pre-auto materialize policy graphs, assume a default scope of 1 day."""
-    auto_materialize_policy = asset_graph.get(asset_key).auto_materialize_policy
-    if auto_materialize_policy is None:
-        time_partitions_def = get_time_partitions_def(asset_graph.get(asset_key).partitions_def)
-        if time_partitions_def is None:
-            max_materializations_per_minute = None
-        elif time_partitions_def.schedule_type == ScheduleType.HOURLY:
-            max_materializations_per_minute = 24
-        else:
-            max_materializations_per_minute = 1
-        rules = {
-            AutoMaterializeRule.materialize_on_missing(),
-            AutoMaterializeRule.materialize_on_required_for_freshness(),
-            AutoMaterializeRule.skip_on_parent_outdated(),
-            AutoMaterializeRule.skip_on_parent_missing(),
-            AutoMaterializeRule.skip_on_required_but_nonexistent_parents(),
-            AutoMaterializeRule.skip_on_backfill_in_progress(),
-        }
-        if not bool(asset_graph.get_downstream_freshness_policies(asset_key=asset_key)):
-            rules.add(AutoMaterializeRule.materialize_on_parent_updated())
-        return AutoMaterializePolicy(
-            rules=rules,
-            max_materializations_per_minute=max_materializations_per_minute,
-        )
-    return auto_materialize_policy
-
-
-class AssetDaemonContext:
+class AutomationTickEvaluationContext:
     def __init__(
         self,
         evaluation_id: int,
         instance: "DagsterInstance",
         asset_graph: BaseAssetGraph,
         cursor: AssetDaemonCursor,
-        materialize_run_tags: Optional[Mapping[str, str]],
-        observe_run_tags: Optional[Mapping[str, str]],
-        auto_observe_asset_keys: Optional[AbstractSet[AssetKey]],
-        auto_materialize_asset_keys: Optional[AbstractSet[AssetKey]],
-        respect_materialization_data_versions: bool,
+        materialize_run_tags: Mapping[str, str],
+        observe_run_tags: Mapping[str, str],
+        auto_observe_asset_keys: AbstractSet[AssetKey],
+        asset_selection: AssetSelection,
         logger: logging.Logger,
         evaluation_time: Optional[datetime.datetime] = None,
-        request_backfills: bool = False,
     ):
-        from dagster._utils.caching_instance_queryer import CachingInstanceQueryer
-
+        resolved_entity_keys = {
+            entity_key
+            for entity_key in (
+                asset_selection.resolve(asset_graph) | asset_selection.resolve_checks(asset_graph)
+            )
+            if asset_graph.get(entity_key).automation_condition is not None
+        }
         self._evaluation_id = evaluation_id
-        self._instance_queryer = CachingInstanceQueryer(
-            instance, asset_graph, evaluation_time=evaluation_time, logger=logger
+        self._evaluator = AutomationConditionEvaluator(
+            entity_keys=resolved_entity_keys,
+            instance=instance,
+            asset_graph=asset_graph,
+            cursor=cursor,
+            evaluation_time=evaluation_time,
+            logger=logger,
         )
-        self._data_time_resolver = CachingDataTimeResolver(self.instance_queryer)
-
-        stale_resolver = CachingStaleStatusResolver(
-            instance=instance, asset_graph=asset_graph, instance_queryer=self.instance_queryer
-        )
-        self._asset_graph_view = AssetGraphView(
-            temporal_context=TemporalContext(
-                effective_dt=self.instance_queryer.evaluation_time,
-                last_event_id=instance.event_log_storage.get_maximum_record_id(),
-            ),
-            stale_resolver=stale_resolver,
-        )
-        self._data_time_resolver = CachingDataTimeResolver(self.instance_queryer)
-        self._cursor = cursor
-        self._auto_materialize_asset_keys = auto_materialize_asset_keys or set()
         self._materialize_run_tags = materialize_run_tags
         self._observe_run_tags = observe_run_tags
         self._auto_observe_asset_keys = auto_observe_asset_keys or set()
-        self._respect_materialization_data_versions = respect_materialization_data_versions
-        self._logger = logger
-        self._request_backfills = request_backfills
-
-    @property
-    def logger(self) -> logging.Logger:
-        return self._logger
-
-    @property
-    def instance_queryer(self) -> "CachingInstanceQueryer":
-        return self._instance_queryer
-
-    @property
-    def data_time_resolver(self) -> CachingDataTimeResolver:
-        return self._data_time_resolver
-
-    @property
-    def asset_graph_view(self) -> AssetGraphView:
-        return self._asset_graph_view
 
     @property
     def cursor(self) -> AssetDaemonCursor:
-        return self._cursor
+        return self._evaluator.cursor
 
     @property
     def asset_graph(self) -> BaseAssetGraph:
-        return self.instance_queryer.asset_graph
+        return self._evaluator.asset_graph
 
-    @property
-    def auto_materialize_asset_keys(self) -> AbstractSet[AssetKey]:
-        return self._auto_materialize_asset_keys
-
-    @property
-    def respect_materialization_data_versions(self) -> bool:
-        return self._respect_materialization_data_versions
-
-    @property
-    def auto_materialize_run_tags(self) -> Mapping[str, str]:
-        return self._materialize_run_tags or {}
-
-    def get_asset_condition_evaluations(
-        self,
-    ) -> Tuple[Sequence[AutomationResult], AbstractSet[AssetKeyPartitionKey]]:
-        """Returns a mapping from asset key to the AutoMaterializeAssetEvaluation for that key, a
-        sequence of new per-asset cursors, and the set of all asset partitions that should be
-        materialized or discarded this tick.
-        """
-        from dagster._core.definitions.declarative_automation.automation_condition_evaluator import (
-            AutomationConditionEvaluator,
-        )
-
-        evaluator = AutomationConditionEvaluator(
-            asset_graph=self.asset_graph,
-            asset_keys=self.auto_materialize_asset_keys,
-            asset_graph_view=self.asset_graph_view,
-            logger=self._logger,
-            cursor=self.cursor,
-            data_time_resolver=self.data_time_resolver,
-            respect_materialization_data_versions=self.respect_materialization_data_versions,
-            auto_materialize_run_tags=self.auto_materialize_run_tags,
-            request_backfills=self._request_backfills,
-        )
-        return evaluator.evaluate()
-
-    def evaluate(
-        self,
-    ) -> Tuple[Sequence[RunRequest], AssetDaemonCursor, Sequence[AutomationConditionEvaluation]]:
-        observe_request_timestamp = get_current_timestamp()
-        auto_observe_run_requests = (
-            get_auto_observe_run_requests(
-                asset_graph=self.asset_graph,
-                last_observe_request_timestamp_by_asset_key=self.cursor.last_observe_request_timestamp_by_asset_key,
-                current_timestamp=observe_request_timestamp,
-                run_tags=self._observe_run_tags,
-                auto_observe_asset_keys=self._auto_observe_asset_keys,
+    def _legacy_build_auto_observe_run_requests(self) -> Sequence[RunRequest]:
+        current_timestamp = self._evaluator.evaluation_time.timestamp()
+        assets_to_auto_observe: Set[AssetKey] = set()
+        for asset_key in self._auto_observe_asset_keys:
+            last_observe_request_timestamp = (
+                self.cursor.last_observe_request_timestamp_by_asset_key.get(asset_key)
             )
-            if self._auto_observe_asset_keys
-            else []
-        )
+            auto_observe_interval_minutes = self.asset_graph.get(
+                asset_key
+            ).auto_observe_interval_minutes
 
-        results, to_request = self.get_asset_condition_evaluations()
+            if auto_observe_interval_minutes and (
+                last_observe_request_timestamp is None
+                or (
+                    last_observe_request_timestamp + auto_observe_interval_minutes * 60
+                    < current_timestamp
+                )
+            ):
+                assets_to_auto_observe.add(asset_key)
 
-        if self._request_backfills:
+        # create groups of asset keys that share the same repository AND the same partitions definition
+        partitions_def_and_asset_key_groups: List[Sequence[AssetKey]] = []
+        for repository_asset_keys in self.asset_graph.split_entity_keys_by_repository(
+            assets_to_auto_observe
+        ):
+            asset_keys_by_partitions_def = defaultdict(list)
+            for asset_key in repository_asset_keys:
+                partitions_def = self.asset_graph.get(asset_key).partitions_def
+                asset_keys_by_partitions_def[partitions_def].append(asset_key)
+            partitions_def_and_asset_key_groups.extend(asset_keys_by_partitions_def.values())
+
+        return [
+            RunRequest(asset_selection=list(asset_keys), tags=self._observe_run_tags)
+            for asset_keys in partitions_def_and_asset_key_groups
+            if len(asset_keys) > 0
+        ]
+
+    def _build_run_requests(self, entity_subsets: Iterable[EntitySubset]) -> Sequence[RunRequest]:
+        if self._evaluator.request_backfills:
+            asset_subsets = cast(
+                Iterable[EntitySubset[AssetKey]],
+                [subset for subset in entity_subsets if isinstance(subset.key, AssetKey)],
+            )
+
             run_requests = (
                 [
                     RunRequest.for_asset_graph_subset(
-                        asset_graph_subset=AssetGraphSubset.from_asset_partition_set(
-                            to_request, asset_graph=self.asset_graph
-                        ),
-                        tags=self.auto_materialize_run_tags,
+                        asset_graph_subset=AssetGraphSubset.from_entity_subsets(asset_subsets),
+                        tags=self._materialize_run_tags,
                     )
                 ]
-                if to_request
+                if asset_subsets
                 else []
             )
         else:
             run_requests = build_run_requests(
-                asset_partitions=to_request,
+                entity_subsets=entity_subsets,
                 asset_graph=self.asset_graph,
-                run_tags=self.auto_materialize_run_tags,
+                run_tags=self._materialize_run_tags,
             )
 
-        run_requests = [*run_requests, *auto_observe_run_requests]
+        return run_requests
 
+    def _get_updated_cursor(
+        self, results: Iterable[AutomationResult], observe_run_requests: Iterable[RunRequest]
+    ) -> AssetDaemonCursor:
+        return self.cursor.with_updates(
+            evaluation_id=self._evaluation_id,
+            condition_cursors=[result.get_new_cursor() for result in results],
+            newly_observe_requested_asset_keys=[
+                asset_key
+                for run_request in observe_run_requests
+                for asset_key in cast(
+                    Sequence[AssetKey],
+                    run_request.asset_selection,  # auto-observe run requests always have asset_selection
+                )
+            ],
+            evaluation_timestamp=self._evaluator.evaluation_time.timestamp(),
+        )
+
+    def _get_updated_evaluations(
+        self, results: Iterable[AutomationResult]
+    ) -> Sequence[AutomationConditionEvaluation[EntityKey]]:
         # only record evaluation results where something changed
         updated_evaluations = []
         for result in results:
-            previous_cursor = self.cursor.get_previous_condition_cursor(result.asset_key)
+            previous_cursor = self.cursor.get_previous_condition_cursor(result.key)
             if (
                 previous_cursor is None
                 or previous_cursor.result_value_hash != result.value_hash
-                or not result.true_slice.is_empty
+                or not result.true_subset.is_empty
             ):
                 updated_evaluations.append(result.serializable_evaluation)
+        return updated_evaluations
+
+    def evaluate(
+        self,
+    ) -> Tuple[
+        Sequence[RunRequest], AssetDaemonCursor, Sequence[AutomationConditionEvaluation[EntityKey]]
+    ]:
+        observe_run_requests = self._legacy_build_auto_observe_run_requests()
+        results, entity_subsets = self._evaluator.evaluate()
 
         return (
-            run_requests,
-            self.cursor.with_updates(
-                evaluation_id=self._evaluation_id,
-                condition_cursors=[result.get_new_cursor() for result in results],
-                newly_observe_requested_asset_keys=[
-                    asset_key
-                    for run_request in auto_observe_run_requests
-                    for asset_key in cast(
-                        Sequence[AssetKey],
-                        run_request.asset_selection,  # auto-observe run requests always have asset_selection
-                    )
-                ],
-                evaluation_timestamp=self.instance_queryer.evaluation_time.timestamp(),
-            ),
-            updated_evaluations,
+            [*self._build_run_requests(entity_subsets), *observe_run_requests],
+            self._get_updated_cursor(results, observe_run_requests),
+            self._get_updated_evaluations(results),
         )
 
 
-def build_run_requests(
-    asset_partitions: Iterable[AssetKeyPartitionKey],
-    asset_graph: BaseAssetGraph,
-    run_tags: Optional[Mapping[str, str]],
-) -> Sequence[RunRequest]:
-    assets_to_reconcile_by_partitions_def_partition_key: Mapping[
-        Tuple[Optional[PartitionsDefinition], Optional[str]], Set[AssetKey]
-    ] = defaultdict(set)
+_PartitionsDefKeyMapping = Dict[
+    Tuple[Optional[PartitionsDefinition], Optional[str]], Set[EntityKey]
+]
+
+
+def _get_mapping_from_asset_partitions(
+    asset_partitions: AbstractSet[AssetKeyPartitionKey], asset_graph: BaseAssetGraph
+) -> _PartitionsDefKeyMapping:
+    mapping: _PartitionsDefKeyMapping = defaultdict(set)
 
     for asset_partition in asset_partitions:
-        assets_to_reconcile_by_partitions_def_partition_key[
+        mapping[
             asset_graph.get(asset_partition.asset_key).partitions_def, asset_partition.partition_key
         ].add(asset_partition.asset_key)
 
+    return mapping
+
+
+def _get_mapping_from_entity_subsets(
+    entity_subsets: Iterable[EntitySubset], asset_graph: BaseAssetGraph
+) -> _PartitionsDefKeyMapping:
+    mapping: _PartitionsDefKeyMapping = defaultdict(set)
+
+    for subset in entity_subsets:
+        partitions_def = asset_graph.get(subset.key).partitions_def
+        if partitions_def:
+            for asset_partition in subset.expensively_compute_asset_partitions():
+                mapping[partitions_def, asset_partition.partition_key].add(
+                    asset_partition.asset_key
+                )
+        else:
+            mapping[partitions_def, None].add(subset.key)
+
+    return mapping
+
+
+def build_run_requests_from_asset_partitions(
+    asset_partitions: AbstractSet[AssetKeyPartitionKey],
+    asset_graph: BaseAssetGraph,
+    run_tags: Optional[Mapping[str, str]],
+) -> Sequence[RunRequest]:
+    return _build_run_requests_from_partitions_def_mapping(
+        _get_mapping_from_asset_partitions(asset_partitions, asset_graph),
+        asset_graph,
+        run_tags,
+    )
+
+
+def build_run_requests(
+    entity_subsets: Iterable[EntitySubset[EntityKey]],
+    asset_graph: BaseAssetGraph,
+    run_tags: Optional[Mapping[str, str]],
+) -> Sequence[RunRequest]:
+    return _build_run_requests_from_partitions_def_mapping(
+        _get_mapping_from_entity_subsets(entity_subsets, asset_graph),
+        asset_graph,
+        run_tags,
+    )
+
+
+def _build_run_requests_from_partitions_def_mapping(
+    mapping: _PartitionsDefKeyMapping,
+    asset_graph: BaseAssetGraph,
+    run_tags: Optional[Mapping[str, str]],
+) -> Sequence[RunRequest]:
     run_requests = []
 
-    for (
-        partitions_def,
-        partition_key,
-    ), asset_keys in assets_to_reconcile_by_partitions_def_partition_key.items():
+    for (partitions_def, partition_key), entity_keys in mapping.items():
         tags = {**(run_tags or {})}
         if partition_key is not None:
             if partitions_def is None:
-                check.failed("Partition key provided for unpartitioned asset")
+                check.failed("Partition key provided for unpartitioned entity")
             tags.update({**partitions_def.get_tags_for_partition_key(partition_key)})
 
-        for asset_keys_in_repo in asset_graph.split_asset_keys_by_repository(asset_keys):
+        for entity_keys_for_repo in asset_graph.split_entity_keys_by_repository(entity_keys):
             run_requests.append(
                 # Do not call run_request.with_resolved_tags_and_config as the partition key is
                 # valid and there is no config.
                 # Calling with_resolved_tags_and_config is costly in asset reconciliation as it
                 # checks for valid partition keys.
                 RunRequest(
-                    asset_selection=list(asset_keys_in_repo),
+                    asset_selection=[k for k in entity_keys_for_repo if isinstance(k, AssetKey)],
                     partition_key=partition_key,
                     tags=tags,
+                    asset_check_keys=[
+                        k for k in entity_keys_for_repo if isinstance(k, AssetCheckKey)
+                    ],
                 )
             )
 
@@ -444,40 +441,3 @@ def _build_run_request_for_partition_key_range(
     }
     partition_key = partition_range_start if partition_range_start == partition_range_end else None
     return RunRequest(asset_selection=asset_keys, partition_key=partition_key, tags=tags)
-
-
-def get_auto_observe_run_requests(
-    last_observe_request_timestamp_by_asset_key: Mapping[AssetKey, float],
-    current_timestamp: float,
-    asset_graph: BaseAssetGraph,
-    run_tags: Optional[Mapping[str, str]],
-    auto_observe_asset_keys: AbstractSet[AssetKey],
-) -> Sequence[RunRequest]:
-    assets_to_auto_observe: Set[AssetKey] = set()
-    for asset_key in auto_observe_asset_keys:
-        last_observe_request_timestamp = last_observe_request_timestamp_by_asset_key.get(asset_key)
-        auto_observe_interval_minutes = asset_graph.get(asset_key).auto_observe_interval_minutes
-
-        if auto_observe_interval_minutes and (
-            last_observe_request_timestamp is None
-            or (
-                last_observe_request_timestamp + auto_observe_interval_minutes * 60
-                < current_timestamp
-            )
-        ):
-            assets_to_auto_observe.add(asset_key)
-
-    # create groups of asset keys that share the same repository AND the same partitions definition
-    partitions_def_and_asset_key_groups: List[Sequence[AssetKey]] = []
-    for repository_asset_keys in asset_graph.split_asset_keys_by_repository(assets_to_auto_observe):
-        asset_keys_by_partitions_def = defaultdict(list)
-        for asset_key in repository_asset_keys:
-            partitions_def = asset_graph.get(asset_key).partitions_def
-            asset_keys_by_partitions_def[partitions_def].append(asset_key)
-        partitions_def_and_asset_key_groups.extend(asset_keys_by_partitions_def.values())
-
-    return [
-        RunRequest(asset_selection=list(asset_keys), tags=run_tags)
-        for asset_keys in partitions_def_and_asset_key_groups
-        if len(asset_keys) > 0
-    ]

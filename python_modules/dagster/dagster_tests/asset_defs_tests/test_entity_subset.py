@@ -1,6 +1,5 @@
 import datetime
-import operator
-from typing import Any, Callable, Optional
+from typing import Optional
 
 import pytest
 from dagster import (
@@ -12,7 +11,10 @@ from dagster import (
     PartitionsDefinition,
     StaticPartitionsDefinition,
 )
-from dagster._core.definitions.asset_subset import AssetSubset, ValidAssetSubset
+from dagster._core.asset_graph_view.serializable_entity_subset import SerializableEntitySubset
+from dagster._core.definitions.declarative_automation.legacy.valid_asset_subset import (
+    ValidAssetSubset,
+)
 from dagster._core.definitions.events import AssetKeyPartitionKey
 from dagster._core.definitions.partition import AllPartitionsSubset, DefaultPartitionsSubset
 from dagster._core.definitions.time_window_partitions import (
@@ -41,58 +43,24 @@ partitions_defs = [
 @pytest.mark.parametrize("partitions_def", partitions_defs)
 def test_empty_subset_subset(partitions_def: Optional[PartitionsDefinition]) -> None:
     key = AssetKey(["foo"])
-    empty_subset = AssetSubset.empty(key, partitions_def)
+    empty_subset = ValidAssetSubset.empty(key, partitions_def)
     assert empty_subset.size == 0
 
     partition_keys = {None} if partitions_def is None else partitions_def.get_partition_keys()
     for pk in partition_keys:
         assert AssetKeyPartitionKey(key, pk) not in empty_subset
 
-    assert empty_subset.asset_partitions == set()
-
 
 @pytest.mark.parametrize("partitions_def", partitions_defs)
 def test_all_subset(partitions_def: Optional[PartitionsDefinition]) -> None:
     key = AssetKey(["foo"])
-    all_subset = AssetSubset.all(
+    all_subset = ValidAssetSubset.all(
         key, partitions_def, DagsterInstance.ephemeral(), datetime.datetime.now()
     )
     partition_keys = {None} if partitions_def is None else partitions_def.get_partition_keys()
     assert all_subset.size == len(partition_keys)
     for pk in partition_keys:
         assert AssetKeyPartitionKey(key, pk) in all_subset
-
-    assert all_subset.asset_partitions == {AssetKeyPartitionKey(key, pk) for pk in partition_keys}
-
-
-@pytest.mark.parametrize("partitions_def", partitions_defs)
-@pytest.mark.parametrize(
-    "operation",
-    [operator.and_, operator.or_, operator.sub],
-)
-@pytest.mark.parametrize("first_all", [True, False])
-@pytest.mark.parametrize("second_all", [True, False])
-def test_operations(
-    partitions_def: Optional[PartitionsDefinition],
-    operation: Callable[..., Any],
-    first_all: bool,
-    second_all: bool,
-) -> None:
-    key = AssetKey(["foo"])
-    subset_a = (
-        AssetSubset.all(key, partitions_def, DagsterInstance.ephemeral(), datetime.datetime.now())
-        if first_all
-        else AssetSubset.empty(key, partitions_def)
-    )
-    subset_b = (
-        AssetSubset.all(key, partitions_def, DagsterInstance.ephemeral(), datetime.datetime.now())
-        if second_all
-        else AssetSubset.empty(key, partitions_def)
-    )
-
-    actual_asset_partitions = operation(subset_a, subset_b).asset_partitions
-    expected_asset_partitions = operation(subset_a.asset_partitions, subset_b.asset_partitions)
-    assert actual_asset_partitions == expected_asset_partitions
 
 
 @pytest.mark.parametrize("use_valid_asset_subset", [True, False])
@@ -135,18 +103,24 @@ def test_operations(
 )
 def test_serialization(value, use_valid_asset_subset) -> None:
     if use_valid_asset_subset:
-        asset_subset = ValidAssetSubset(asset_key=AssetKey("foo"), value=value)
+        asset_subset = ValidAssetSubset(key=AssetKey("foo"), value=value)
     else:
-        asset_subset = AssetSubset(asset_key=AssetKey("foo"), value=value)
+        asset_subset = SerializableEntitySubset(key=AssetKey("foo"), value=value)
 
     serialized_asset_subset = serialize_value(asset_subset)
     assert "ValidAssetSubset" not in serialized_asset_subset
 
-    round_trip_asset_subset = deserialize_value(serialized_asset_subset, AssetSubset)
+    round_trip_asset_subset = deserialize_value(serialized_asset_subset, SerializableEntitySubset)
 
-    assert isinstance(round_trip_asset_subset, AssetSubset)
+    assert isinstance(round_trip_asset_subset, SerializableEntitySubset)
     # should always be deserialized as an AssetSubset
     assert not isinstance(round_trip_asset_subset, ValidAssetSubset)
 
-    assert asset_subset.asset_key == round_trip_asset_subset.asset_key
-    assert asset_subset.asset_partitions == round_trip_asset_subset.asset_partitions
+    assert asset_subset.key == round_trip_asset_subset.key
+
+    if isinstance(asset_subset.value, bool):
+        assert asset_subset.value == round_trip_asset_subset.value
+    else:
+        assert set(asset_subset.value.get_partition_keys()) == set(
+            round_trip_asset_subset.subset_value.get_partition_keys()
+        )

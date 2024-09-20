@@ -43,7 +43,10 @@ def test_on_missing_unpartitioned() -> None:
 
     # now B has been materialized, so really shouldn't execute again
     state = state.with_runs(
-        *(run_request(ak, pk) for ak, pk in result.true_subset.asset_partitions)
+        *(
+            run_request(ak, pk)
+            for ak, pk in result.true_subset.expensively_compute_asset_partitions()
+        )
     )
     state, result = state.evaluate("B")
     assert result.true_subset.size == 0
