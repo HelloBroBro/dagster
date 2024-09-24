@@ -3957,6 +3957,7 @@ export type QueryRunTagsOrErrorArgs = {
 
 export type QueryRunsFeedOrErrorArgs = {
   cursor?: InputMaybe<Scalars['String']['input']>;
+  filter?: InputMaybe<RunsFilter>;
   limit: Scalars['Int']['input'];
 };
 
@@ -4839,6 +4840,7 @@ export type Schedule = {
   potentialTickTimestamps: Array<Scalars['Float']['output']>;
   scheduleState: InstigationState;
   solidSelection: Maybe<Array<Maybe<Scalars['String']['output']>>>;
+  tags: Array<DefinitionTag>;
 };
 
 export type ScheduleFutureTickArgs = {
@@ -4954,6 +4956,7 @@ export type Sensor = {
   nextTick: Maybe<DryRunInstigationTick>;
   sensorState: InstigationState;
   sensorType: SensorType;
+  tags: Array<DefinitionTag>;
   targets: Maybe<Array<Target>>;
 };
 
@@ -13716,6 +13719,7 @@ export const buildSchedule = (
         : buildInstigationState({}, relationshipsToOmit),
     solidSelection:
       overrides && overrides.hasOwnProperty('solidSelection') ? overrides.solidSelection! : [],
+    tags: overrides && overrides.hasOwnProperty('tags') ? overrides.tags! : [],
   };
 };
 
@@ -13956,6 +13960,7 @@ export const buildSensor = (
       overrides && overrides.hasOwnProperty('sensorType')
         ? overrides.sensorType!
         : SensorType.ASSET,
+    tags: overrides && overrides.hasOwnProperty('tags') ? overrides.tags! : [],
     targets: overrides && overrides.hasOwnProperty('targets') ? overrides.targets! : [],
   };
 };
