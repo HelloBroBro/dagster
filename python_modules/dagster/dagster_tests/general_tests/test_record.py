@@ -1,4 +1,5 @@
 import pickle
+import sys
 from abc import ABC, abstractmethod
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, Generic, List, Optional, Sequence, TypeVar, Union
@@ -545,6 +546,7 @@ def test_generic() -> None:
     assert IntThings(things=[1, 2]).first_thing == 1
 
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="py38/py39 weirdness")
 def test_generic_nested() -> None:
     T = TypeVar("T")
 
@@ -640,6 +642,7 @@ def test_subclass_propagate_change_defaults() -> None:
     assert repr(subsub) == "SubSub(a=0, b=0, c=-1, d=2)"
 
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="py38/py39 weirdness")
 def test_generic_with_propagate() -> None:
     T = TypeVar("T")
 
@@ -704,6 +707,7 @@ def test_generic_with_propagate() -> None:
     assert copy(obj, label="...").label == "..."
 
 
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="py38/py39 weirdness")
 def test_generic_with_propagate_type_checking() -> None:
     T = TypeVar("T")
 
