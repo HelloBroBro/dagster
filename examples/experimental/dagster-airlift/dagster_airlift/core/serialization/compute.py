@@ -8,24 +8,19 @@ from dagster import (
     Definitions,
     _check as check,
 )
-from dagster._core.utils import toposort_flatten
 from dagster._record import record
 
 from dagster_airlift.constants import TASK_MAPPING_METADATA_KEY
-from dagster_airlift.core.airflow_instance import AirflowInstance, DagInfo, TaskInfo
-from dagster_airlift.core.dag_asset import dag_asset_spec_data, get_leaf_assets_for_dag
+from dagster_airlift.core.airflow_instance import AirflowInstance, DagInfo
+from dagster_airlift.core.dag_asset import get_leaf_assets_for_dag
 from dagster_airlift.core.serialization.serialized_data import (
     KeyScopedDataItem,
+    MappedAirflowTaskData,
     SerializedAirflowDefinitionsData,
-    SerializedAssetKeyScopedAirflowData,
     SerializedDagData,
     SerializedTaskHandleData,
-)
-from dagster_airlift.core.task_asset import (
-    MappedAirflowTaskData,
     TaskHandle,
-    TasksToAssetMapping,
-    get_airflow_data_for_task_mapped_spec,
+    TaskInfo,
 )
 from dagster_airlift.core.utils import spec_iterator
 from dagster_airlift.migration_state import AirflowMigrationState
@@ -38,10 +33,6 @@ class AirliftMetadataMappingInfo:
     @cached_property
     def mapped_asset_specs(self) -> List[AssetSpec]:
         return [spec for spec in self.asset_specs if is_mapped_asset_spec(spec)]
-
-    @cached_property
-    def asset_keys(self) -> Set[AssetKey]:
-        return {spec.key for spec in self.asset_specs}
 
     @cached_property
     def dag_ids(self) -> Set[str]:
@@ -85,6 +76,14 @@ class AirliftMetadataMappingInfo:
                     task_handle_map[asset_key].add(TaskHandle(dag_id=dag_id, task_id=task_id))
         return task_handle_map
 
+    @cached_property
+    def downstream_deps(self) -> Dict[AssetKey, Set[AssetKey]]:
+        downstreams = defaultdict(set)
+        for spec in self.mapped_asset_specs:
+            for dep in spec.deps:
+                downstreams[dep.asset_key].add(spec.key)
+        return downstreams
+
 
 def is_mapped_asset_spec(spec: AssetSpec) -> bool:
     return TASK_MAPPING_METADATA_KEY in spec.metadata
@@ -126,24 +125,27 @@ class FetchedAirflowData:
         return migration_state_map
 
     @cached_property
-    def airflow_data_by_key(self) -> Dict[AssetKey, SerializedAssetKeyScopedAirflowData]:
-        airflow_data_by_key = {}
-        for spec in self.mapping_info.mapped_asset_specs:
-            mapping = TasksToAssetMapping(
-                asset=spec,
-                mapped_tasks=[
-                    MappedAirflowTaskData(
-                        task_handle=task_handle,
-                        task_info=self.task_info_map[task_handle.dag_id][task_handle.task_id],
-                        migrated=self.migration_state_map[task_handle.dag_id][task_handle.task_id],
-                    )
-                    for task_handle in task_handles_for_spec(spec)
-                ],
+    def all_mapped_tasks(self) -> Dict[AssetKey, List[MappedAirflowTaskData]]:
+        return {
+            spec.key: [
+                MappedAirflowTaskData(
+                    task_handle=task_handle,
+                    task_info=self.task_info_map[task_handle.dag_id][task_handle.task_id],
+                    migrated=self.migration_state_map[task_handle.dag_id][task_handle.task_id],
+                )
+                for task_handle in task_handles_for_spec(spec)
+            ]
+            for spec in self.mapping_info.mapped_asset_specs
+        }
+
+    def task_handle_data_for_dag(self, dag_id: str) -> Dict[str, SerializedTaskHandleData]:
+        return {
+            task_id: SerializedTaskHandleData(
+                migration_state=self.migration_state_map[dag_id].get(task_id),
+                asset_keys_in_task=self.mapping_info.asset_key_map[dag_id][task_id],
             )
-
-            airflow_data_by_key[spec.key] = get_airflow_data_for_task_mapped_spec(mapping)
-
-        return airflow_data_by_key
+            for task_id in self.mapping_info.task_id_map[dag_id]
+        }
 
 
 def fetch_all_airflow_data(
@@ -171,51 +173,23 @@ def compute_serialized_data(
     airflow_instance: AirflowInstance, defs: Definitions
 ) -> "SerializedAirflowDefinitionsData":
     mapping_info = build_airlift_metadata_mapping_info(defs)
-
     fetched_airflow_data = fetch_all_airflow_data(airflow_instance, mapping_info)
-    downstreams_asset_dependency_graph: Dict[AssetKey, Set[AssetKey]] = defaultdict(set)
-    upstreams_asset_dependency_graph: Dict[AssetKey, Set[AssetKey]] = defaultdict(set)
-    for spec in mapping_info.mapped_asset_specs:
-        for dep in spec.deps:
-            upstreams_asset_dependency_graph[spec.key].add(dep.asset_key)
-            downstreams_asset_dependency_graph[dep.asset_key].add(spec.key)
-
-    all_asset_keys = mapping_info.asset_keys
-
-    dag_datas = {}
-    for dag_id, dag_info in fetched_airflow_data.dag_infos.items():
-        leaf_asset_keys = get_leaf_assets_for_dag(
-            asset_keys_in_dag=mapping_info.asset_keys_per_dag_id[dag_id],
-            downstreams_asset_dependency_graph=downstreams_asset_dependency_graph,
-        )
-        dag_spec = dag_asset_spec_data(
-            airflow_instance=airflow_instance,
-            asset_keys_for_leaf_tasks=leaf_asset_keys,
-            dag_info=dag_info,
-        )
-        all_asset_keys.add(dag_spec.asset_key)
-        # Add dag asset to the upstream/downstream graphs.
-        upstreams_asset_dependency_graph[dag_spec.asset_key] = set(leaf_asset_keys)
-        for leaf_asset_key in leaf_asset_keys:
-            downstreams_asset_dependency_graph[leaf_asset_key].add(dag_spec.asset_key)
-        task_handle_data = {}
-        for task_id in mapping_info.task_id_map[dag_id]:
-            task_handle_data[task_id] = SerializedTaskHandleData(
-                migration_state=fetched_airflow_data.migration_state_map[dag_id].get(task_id),
-                asset_keys_in_task=mapping_info.asset_key_map[dag_id][task_id],
-            )
-        dag_datas[dag_id] = SerializedDagData(
-            dag_id=dag_id,
-            spec_data=dag_spec,
-            task_handle_data=task_handle_data,
-            all_asset_keys_in_tasks=mapping_info.asset_keys_per_dag_id[dag_id],
-        )
-    topology_order = toposort_flatten(upstreams_asset_dependency_graph)
     return SerializedAirflowDefinitionsData(
         key_scoped_data_items=[
-            KeyScopedDataItem(asset_key=k, data=v)
-            for k, v in fetched_airflow_data.airflow_data_by_key.items()
+            KeyScopedDataItem(asset_key=k, mapped_tasks=v)
+            for k, v in fetched_airflow_data.all_mapped_tasks.items()
         ],
-        dag_datas=dag_datas,
-        asset_key_topological_ordering=topology_order,
+        dag_datas={
+            dag_id: SerializedDagData(
+                dag_id=dag_id,
+                task_handle_data=fetched_airflow_data.task_handle_data_for_dag(dag_id),
+                dag_info=dag_info,
+                source_code=airflow_instance.get_dag_source_code(dag_info.metadata["file_token"]),
+                leaf_asset_keys=get_leaf_assets_for_dag(
+                    asset_keys_in_dag=mapping_info.asset_keys_per_dag_id[dag_id],
+                    downstreams_asset_dependency_graph=mapping_info.downstream_deps,
+                ),
+            )
+            for dag_id, dag_info in fetched_airflow_data.dag_infos.items()
+        },
     )

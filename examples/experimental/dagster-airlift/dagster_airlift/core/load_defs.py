@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Iterator, List, Optional
+from typing import Iterator, Optional
 
 from dagster import (
     AssetsDefinition,
@@ -15,7 +15,7 @@ from dagster_airlift.core.airflow_defs_data import AirflowDefinitionsData
 from dagster_airlift.core.airflow_instance import AirflowInstance
 from dagster_airlift.core.sensor import (
     DEFAULT_AIRFLOW_SENSOR_INTERVAL_SECONDS,
-    build_airflow_polling_sensor,
+    build_airflow_polling_sensor_defs,
 )
 from dagster_airlift.core.serialization.compute import compute_serialized_data
 from dagster_airlift.core.state_backed_defs_loader import StateBackedDefinitionsLoader
@@ -43,12 +43,15 @@ class AirflowInstanceDefsLoader(StateBackedDefinitionsLoader[AirflowDefinitionsD
             ),
         )
 
-    def defs_from_state(self, state: AirflowDefinitionsData) -> Definitions:
-        return definitions_from_airflow_data(
-            state,
-            self.explicit_defs,
-            self.airflow_instance,
-            self.sensor_minimum_interval_seconds,
+    def defs_from_state(self, airflow_data: AirflowDefinitionsData) -> Definitions:
+        return Definitions.merge(
+            enrich_explicit_defs_with_airflow_metadata(self.explicit_defs, airflow_data),
+            airflow_data.construct_dag_assets_defs(),
+            build_airflow_polling_sensor_defs(
+                airflow_instance=self.airflow_instance,
+                minimum_interval_seconds=self.sensor_minimum_interval_seconds,
+                airflow_data=airflow_data,
+            ),
         )
 
 
@@ -59,73 +62,34 @@ def build_defs_from_airflow_instance(
     defs: Optional[Definitions] = None,
     sensor_minimum_interval_seconds: int = DEFAULT_AIRFLOW_SENSOR_INTERVAL_SECONDS,
 ) -> Definitions:
-    defs = defs or Definitions()
     return AirflowInstanceDefsLoader(
         airflow_instance=airflow_instance,
-        explicit_defs=defs,
+        explicit_defs=defs or Definitions(),
         sensor_minimum_interval_seconds=sensor_minimum_interval_seconds,
     ).build_defs()
 
 
-def definitions_from_airflow_data(
-    airflow_data: AirflowDefinitionsData,
-    defs: Definitions,
-    airflow_instance: AirflowInstance,
-    sensor_minimum_interval_seconds: int,
+def enrich_explicit_defs_with_airflow_metadata(
+    explicit_defs: Definitions, airflow_data: AirflowDefinitionsData
 ) -> Definitions:
-    assets_defs = construct_all_assets(
-        definitions=defs,
-        airflow_data=airflow_data,
-    )
-    return defs_with_assets_and_sensor(
-        defs,
-        assets_defs,
-        airflow_instance,
-        sensor_minimum_interval_seconds,
-        airflow_data=airflow_data,
-    )
-
-
-def defs_with_assets_and_sensor(
-    defs: Definitions,
-    assets_defs: List[AssetsDefinition],
-    airflow_instance: AirflowInstance,
-    sensor_minimum_interval_seconds: int,
-    airflow_data: AirflowDefinitionsData,
-) -> Definitions:
-    airflow_sensor = build_airflow_polling_sensor(
-        airflow_instance=airflow_instance,
-        minimum_interval_seconds=sensor_minimum_interval_seconds,
-        airflow_data=airflow_data,
-    )
     return Definitions(
-        assets=assets_defs,
-        asset_checks=defs.asset_checks if defs else None,
-        sensors=[airflow_sensor, *defs.sensors] if defs and defs.sensors else [airflow_sensor],
-        schedules=defs.schedules if defs else None,
-        jobs=defs.jobs if defs else None,
-        executor=defs.executor if defs else None,
-        loggers=defs.loggers if defs else None,
-        resources=defs.resources if defs else None,
-    )
-
-
-def construct_all_assets(
-    definitions: Definitions,
-    airflow_data: AirflowDefinitionsData,
-) -> List[AssetsDefinition]:
-    return (
-        list(_apply_airflow_data_to_specs(definitions, airflow_data))
-        + airflow_data.construct_dag_assets_defs()
+        assets=list(_apply_airflow_data_to_specs(explicit_defs, airflow_data)),
+        asset_checks=explicit_defs.asset_checks,
+        sensors=explicit_defs.sensors,
+        schedules=explicit_defs.schedules,
+        jobs=explicit_defs.jobs,
+        executor=explicit_defs.executor,
+        loggers=explicit_defs.loggers,
+        resources=explicit_defs.resources,
     )
 
 
 def _apply_airflow_data_to_specs(
-    definitions: Definitions,
+    explicit_defs: Definitions,
     airflow_data: AirflowDefinitionsData,
 ) -> Iterator[AssetsDefinition]:
     """Apply asset spec transformations to the asset definitions."""
-    for asset in definitions.assets or []:
+    for asset in explicit_defs.assets or []:
         asset = check.inst(  # noqa: PLW2901
             asset,
             (AssetSpec, AssetsDefinition),
