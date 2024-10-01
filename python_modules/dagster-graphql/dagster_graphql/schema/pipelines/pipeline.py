@@ -9,8 +9,8 @@ from dagster._core.events import DagsterEventType
 from dagster._core.remote_representation.external import ExternalExecutionPlan, ExternalJob
 from dagster._core.remote_representation.external_data import (
     DEFAULT_MODE_NAME,
-    ExternalPartitionExecutionErrorData,
-    ExternalPresetData,
+    PartitionExecutionErrorSnap,
+    PresetSnap,
 )
 from dagster._core.remote_representation.represented import RepresentedJob
 from dagster._core.storage.dagster_run import (
@@ -24,6 +24,7 @@ from dagster._core.workspace.permissions import Permissions
 from dagster._utils.yaml_utils import dump_run_config_yaml
 
 from dagster_graphql.implementation.events import from_event_record, iterate_metadata_entries
+from dagster_graphql.implementation.fetch_asset_checks import get_asset_checks_for_run_id
 from dagster_graphql.implementation.fetch_assets import get_assets_for_run_id, get_unique_asset_id
 from dagster_graphql.implementation.fetch_pipelines import get_job_reference_or_raise
 from dagster_graphql.implementation.fetch_runs import get_runs, get_stats, get_step_stats
@@ -370,6 +371,7 @@ class GrapheneRun(graphene.ObjectType):
     canTerminate = graphene.NonNull(graphene.Boolean)
     assetMaterializations = non_null_list(GrapheneMaterializationEvent)
     assets = non_null_list(GrapheneAsset)
+    assetChecks = graphene.List(graphene.NonNull(GrapheneAssetCheckHandle))
     eventConnection = graphene.Field(
         graphene.NonNull(GrapheneEventConnection),
         afterCursor=graphene.Argument(graphene.String),
@@ -544,6 +546,9 @@ class GrapheneRun(graphene.ObjectType):
 
     def resolve_assets(self, graphene_info: ResolveInfo):
         return get_assets_for_run_id(graphene_info, self.run_id)
+
+    def resolve_assetChecks(self, graphene_info: ResolveInfo):
+        return get_asset_checks_for_run_id(graphene_info, self.run_id)
 
     def resolve_assetMaterializations(self, graphene_info: ResolveInfo):
         # convenience field added for users querying directly via GraphQL
@@ -867,7 +872,7 @@ class GraphenePipelinePreset(graphene.ObjectType):
     def __init__(self, active_preset_data, pipeline_name):
         super().__init__()
         self._active_preset_data = check.inst_param(
-            active_preset_data, "active_preset_data", ExternalPresetData
+            active_preset_data, "active_preset_data", PresetSnap
         )
         self._job_name = check.str_param(pipeline_name, "pipeline_name")
 
@@ -941,7 +946,7 @@ class GraphenePipeline(GrapheneIPipelineSnapshotMixin, graphene.ObjectType):
         handle = self._external_job.repository_handle
         location = graphene_info.context.get_code_location(handle.location_name)
         repository = location.get_repository(handle.repository_name)
-        return bool(repository.get_external_asset_nodes(self._external_job.name))
+        return bool(repository.get_asset_node_snaps(self._external_job.name))
 
     def resolve_repository(self, graphene_info: ResolveInfo):
         from dagster_graphql.schema.external import GrapheneRepository
@@ -970,7 +975,7 @@ class GraphenePipeline(GrapheneIPipelineSnapshotMixin, graphene.ObjectType):
             instance=graphene_info.context.instance,
         )
 
-        if isinstance(result, ExternalPartitionExecutionErrorData):
+        if isinstance(result, PartitionExecutionErrorSnap):
             raise DagsterUserCodeProcessError.from_error_info(result.error)
 
         all_partition_keys = result.partition_names

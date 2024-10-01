@@ -6,12 +6,9 @@ from dagster import (
     AssetKey,
     AssetMaterialization,
     DefaultSensorStatus,
-    JsonMetadataValue,
-    MarkdownMetadataValue,
     RunRequest,
     SensorEvaluationContext,
     SensorResult,
-    TimestampMetadataValue,
     _check as check,
     sensor,
 )
@@ -24,10 +21,14 @@ from dagster._grpc.client import DEFAULT_SENSOR_GRPC_TIMEOUT
 from dagster._record import record
 from dagster._serdes import deserialize_value, serialize_value
 from dagster._serdes.serdes import whitelist_for_serdes
-from dagster._time import datetime_from_timestamp, get_current_datetime, get_current_timestamp
+from dagster._time import datetime_from_timestamp, get_current_datetime
 
 from dagster_airlift.core.airflow_defs_data import AirflowDefinitionsData
 from dagster_airlift.core.airflow_instance import AirflowInstance
+from dagster_airlift.core.sensor.event_translation import (
+    get_asset_events,
+    get_timestamp_from_materialization,
+)
 
 MAIN_LOOP_TIMEOUT_SECONDS = DEFAULT_SENSOR_GRPC_TIMEOUT - 20
 DEFAULT_AIRFLOW_SENSOR_INTERVAL_SECONDS = 1
@@ -59,7 +60,7 @@ def build_airflow_polling_sensor_defs(
     minimum_interval_seconds: int = DEFAULT_AIRFLOW_SENSOR_INTERVAL_SECONDS,
 ) -> Definitions:
     @sensor(
-        name="airflow_dag_status_sensor",
+        name=f"{airflow_instance.name}__airflow_dag_status_sensor",
         minimum_interval_seconds=minimum_interval_seconds,
         default_status=DefaultSensorStatus.RUNNING,
         # This sensor will only ever execute asset checks and not asset materializations.
@@ -165,35 +166,7 @@ def materializations_and_requests_from_batch_iter(
         offset=offset,
     )
     for i, dag_run in enumerate(runs):
-        dag_asset_key = airflow_data.asset_key_for_dag(dag_run.dag_id)
-        materializations_for_run = []
-        all_asset_keys_materialized = set()
-        metadata = {
-            "Airflow Run ID": dag_run.run_id,
-            "Run Metadata (raw)": JsonMetadataValue(dag_run.metadata),
-            "Run Type": dag_run.run_type,
-            "Airflow Config": JsonMetadataValue(dag_run.config),
-            "Creation Timestamp": TimestampMetadataValue(get_current_timestamp()),
-        }
-        # Add dag materialization
-        dag_metadata = {
-            **metadata,
-            "Run Details": MarkdownMetadataValue(f"[View Run]({dag_run.url})"),
-            "Start Date": TimestampMetadataValue(dag_run.start_date),
-            "End Date": TimestampMetadataValue(dag_run.end_date),
-        }
-        materializations_for_run.append(
-            (
-                dag_run.end_date,
-                AssetMaterialization(
-                    asset_key=dag_asset_key,
-                    description=dag_run.note,
-                    metadata=dag_metadata,
-                ),
-            )
-        )
-        all_asset_keys_materialized.add(dag_asset_key)
-        for task_run in airflow_instance.get_task_instance_batch(
+        task_instances = airflow_instance.get_task_instance_batch(
             run_id=dag_run.run_id,
             dag_id=dag_run.dag_id,
             # We need to make sure to ignore tasks that have already been migrated.
@@ -203,33 +176,18 @@ def materializations_and_requests_from_batch_iter(
                 if not airflow_data.migration_state_for_task(dag_run.dag_id, task_id)
             ],
             states=["success"],
-        ):
-            asset_keys = airflow_data.asset_keys_in_task(dag_run.dag_id, task_run.task_id)
-            task_metadata = {
-                **metadata,
-                "Run Details": MarkdownMetadataValue(f"[View Run]({task_run.details_url})"),
-                "Task Logs": MarkdownMetadataValue(f"[View Logs]({task_run.log_url})"),
-                "Start Date": TimestampMetadataValue(task_run.start_date),
-                "End Date": TimestampMetadataValue(task_run.end_date),
-            }
-            for asset_key in asset_keys:
-                materializations_for_run.append(
-                    (
-                        task_run.end_date,
-                        AssetMaterialization(
-                            asset_key=asset_key,
-                            description=task_run.note,
-                            metadata=task_metadata,
-                        ),
-                    )
-                )
-                all_asset_keys_materialized.add(asset_key)
+        )
+
+        mats = get_asset_events(dag_run, task_instances, airflow_data)
+        all_asset_keys_materialized = {mat.asset_key for mat in mats}
         yield (
             BatchResult(
                 idx=i + offset,
-                materializations_and_timestamps=materializations_for_run,
+                materializations_and_timestamps=[
+                    (get_timestamp_from_materialization(mat), mat) for mat in mats
+                ],
                 all_asset_keys_materialized=all_asset_keys_materialized,
             )
-            if materializations_for_run
+            if mats
             else None
         )

@@ -1432,6 +1432,7 @@ type Run implements PipelineRun & RunsFeedEntry {
   parentPipelineSnapshotId: String
   resolvedOpSelection: [String!]
   assetMaterializations: [MaterializationEvent!]!
+  assetChecks: [AssetCheckhandle!]
   updateTime: Float
   hasReExecutePermission: Boolean!
   hasTerminatePermission: Boolean!
@@ -1640,6 +1641,7 @@ type Schedule {
   potentialTickTimestamps(startTimestamp: Float, upperLimit: Int, lowerLimit: Int): [Float!]!
   assetSelection: AssetSelection
   tags: [DefinitionTag!]!
+  metadataEntries: [MetadataEntry!]!
 }
 
 enum InstigationStatus {
@@ -3032,6 +3034,7 @@ type Sensor {
   sensorType: SensorType!
   assetSelection: AssetSelection
   tags: [DefinitionTag!]!
+  metadataEntries: [MetadataEntry!]!
 }
 
 type Target {
@@ -3285,6 +3288,7 @@ type Query {
   runsOrError(filter: RunsFilter, cursor: String, limit: Int): RunsOrError!
   runOrError(runId: ID!): RunOrError!
   runsFeedOrError(limit: Int!, cursor: String, filter: RunsFilter): RunsFeedConnectionOrError!
+  runsFeedCountOrError(filter: RunsFilter): RunsFeedCountOrError!
   runTagKeysOrError: RunTagKeysOrError
   runTagsOrError(tagKeys: [String!], valuePrefix: String, limit: Int): RunTagsOrError
   runIdsOrError(filter: RunsFilter, cursor: String, limit: Int): RunIdsOrError!
@@ -3447,6 +3451,12 @@ type RunsFeedConnection {
   results: [RunsFeedEntry!]!
   cursor: String!
   hasMore: Boolean!
+}
+
+union RunsFeedCountOrError = RunsFeedCount | PythonError
+
+type RunsFeedCount {
+  count: Int!
 }
 
 union RunTagKeysOrError = PythonError | RunTagKeys
