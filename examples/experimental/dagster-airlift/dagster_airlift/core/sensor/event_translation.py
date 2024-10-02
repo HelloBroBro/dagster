@@ -1,4 +1,4 @@
-from typing import Any, List, Mapping, Sequence
+from typing import Any, Callable, Iterable, List, Mapping, Sequence
 
 from dagster import (
     AssetMaterialization,
@@ -12,6 +12,10 @@ from dagster._time import get_current_timestamp
 from dagster_airlift.constants import EFFECTIVE_TIMESTAMP_METADATA_KEY
 from dagster_airlift.core.airflow_defs_data import AirflowDefinitionsData
 from dagster_airlift.core.airflow_instance import DagRun, TaskInstance
+
+AirflowEventTranslationFn = Callable[
+    [DagRun, Sequence[TaskInstance], AirflowDefinitionsData], Iterable[AssetMaterialization]
+]
 
 
 def get_asset_events(
@@ -50,9 +54,9 @@ def get_dag_run_metadata(dag_run: DagRun) -> Mapping[str, Any]:
     return {
         **get_common_metadata(dag_run),
         "Run Details": MarkdownMetadataValue(f"[View Run]({dag_run.url})"),
-        "Start Date": TimestampMetadataValue(dag_run.start_date),
-        "End Date": TimestampMetadataValue(dag_run.end_date),
-        EFFECTIVE_TIMESTAMP_METADATA_KEY: TimestampMetadataValue(dag_run.end_date),
+        "Start Date": TimestampMetadataValue(dag_run.start_date.timestamp()),
+        "End Date": TimestampMetadataValue(dag_run.end_date.timestamp()),
+        EFFECTIVE_TIMESTAMP_METADATA_KEY: TimestampMetadataValue(dag_run.end_date.timestamp()),
     }
 
 
@@ -71,9 +75,11 @@ def get_task_instance_metadata(dag_run: DagRun, task_instance: TaskInstance) -> 
         **get_common_metadata(dag_run),
         "Run Details": MarkdownMetadataValue(f"[View Run]({task_instance.details_url})"),
         "Task Logs": MarkdownMetadataValue(f"[View Logs]({task_instance.log_url})"),
-        "Start Date": TimestampMetadataValue(task_instance.start_date),
-        "End Date": TimestampMetadataValue(task_instance.end_date),
-        EFFECTIVE_TIMESTAMP_METADATA_KEY: TimestampMetadataValue(task_instance.end_date),
+        "Start Date": TimestampMetadataValue(task_instance.start_date.timestamp()),
+        "End Date": TimestampMetadataValue(task_instance.end_date.timestamp()),
+        EFFECTIVE_TIMESTAMP_METADATA_KEY: TimestampMetadataValue(
+            task_instance.end_date.timestamp()
+        ),
     }
 
 

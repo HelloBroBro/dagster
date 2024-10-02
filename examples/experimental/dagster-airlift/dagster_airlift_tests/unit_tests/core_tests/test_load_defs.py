@@ -25,26 +25,27 @@ from dagster_airlift.core import (
     dag_defs,
     task_defs,
 )
-from dagster_airlift.core.airflow_defs_data import (
-    AirflowDefinitionsData,
-    key_for_automapped_task_asset,
-    make_default_dag_asset_key,
-)
 from dagster_airlift.core.load_defs import build_full_automapped_dags_from_airflow_instance
 from dagster_airlift.core.multiple_tasks import targeted_by_multiple_tasks
 from dagster_airlift.core.serialization.compute import (
     build_airlift_metadata_mapping_info,
     compute_serialized_data,
-    is_mapped_asset_spec,
 )
-from dagster_airlift.core.serialization.serialized_data import TaskHandle
+from dagster_airlift.core.serialization.defs_construction import (
+    key_for_automapped_task_asset,
+    make_default_dag_asset_key,
+)
+from dagster_airlift.core.serialization.serialized_data import (
+    SerializedAirflowDefinitionsData,
+    TaskHandle,
+)
 from dagster_airlift.core.state_backed_defs_loader import (
     scoped_reconstruction_metadata,
     unwrap_reconstruction_metadata,
 )
-from dagster_airlift.core.utils import metadata_for_task_mapping
+from dagster_airlift.core.utils import is_mapped_asset_spec, metadata_for_task_mapping
 from dagster_airlift.test import make_instance
-from dagster_airlift.utils import DAGSTER_AIRLIFT_MIGRATION_STATE_DIR_ENV_VAR
+from dagster_airlift.utils import DAGSTER_AIRLIFT_PROXIED_STATE_DIR_ENV_VAR
 
 from dagster_airlift_tests.unit_tests.conftest import (
     assert_dependency_structure_in_assets,
@@ -313,8 +314,8 @@ def test_local_airflow_instance() -> None:
 
     with environ(
         {
-            DAGSTER_AIRLIFT_MIGRATION_STATE_DIR_ENV_VAR: str(
-                Path(__file__).parent / "migration_state_for_sqlite_test"
+            DAGSTER_AIRLIFT_PROXIED_STATE_DIR_ENV_VAR: str(
+                Path(__file__).parent / "proxied_state_for_sqlite_test"
             ),
         }
     ):
@@ -351,7 +352,7 @@ def test_cached_loading() -> None:
     assert isinstance(defs.metadata["dagster-airlift/source/test_instance"].value, str)
     assert isinstance(
         deserialize_value(defs.metadata["dagster-airlift/source/test_instance"].value),
-        AirflowDefinitionsData,
+        SerializedAirflowDefinitionsData,
     )
 
     with scoped_reconstruction_metadata(unwrap_reconstruction_metadata(defs)):

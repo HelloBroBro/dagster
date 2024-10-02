@@ -62,8 +62,8 @@ class AirflowInstanceFake(AirflowInstance):
         return [
             run
             for run in self._dag_runs_by_dag_id[dag_id]
-            if start_date.timestamp() <= run.start_date <= end_date.timestamp()
-            and start_date.timestamp() <= run.end_date <= end_date.timestamp()
+            if start_date.timestamp() <= run.start_date.timestamp() <= end_date.timestamp()
+            and start_date.timestamp() <= run.end_date.timestamp() <= end_date.timestamp()
         ]
 
     def get_dag_runs_batch(
@@ -77,7 +77,7 @@ class AirflowInstanceFake(AirflowInstance):
             (run.end_date, run)
             for runs in self._dag_runs_by_dag_id.values()
             for run in runs
-            if end_date_gte.timestamp() <= run.end_date <= end_date_lte.timestamp()
+            if end_date_gte.timestamp() <= run.end_date.timestamp() <= end_date_lte.timestamp()
             and run.dag_id in dag_ids
         ]
         sorted_by_end_date = [run for _, run in sorted(runs, key=lambda x: x[0])]
@@ -171,8 +171,8 @@ def make_task_instance(
         run_id=run_id,
         metadata={
             "state": "success",
-            "start_date": AirflowInstance.airflow_date_from_datetime(start_date),
-            "end_date": AirflowInstance.airflow_date_from_datetime(end_date),
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
         },
     )
 
@@ -184,8 +184,8 @@ def make_dag_run(dag_id: str, run_id: str, start_date: datetime, end_date: datet
         run_id=run_id,
         metadata={
             "state": "success",
-            "start_date": AirflowInstance.airflow_date_from_datetime(start_date),
-            "end_date": AirflowInstance.airflow_date_from_datetime(end_date),
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
             "run_type": "manual",
             "note": "dummy note",
             "conf": {},
@@ -227,8 +227,8 @@ def make_instance(
                     dag_id=dag_run.dag_id,
                     task_id=task_id,
                     run_id=dag_run.run_id,
-                    start_date=dag_run.start_datetime,
-                    end_date=dag_run.end_datetime
+                    start_date=dag_run.start_date,
+                    end_date=dag_run.end_date
                     - timedelta(
                         seconds=1
                     ),  # Ensure that the task ends before the full "dag" completes.
