@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from typing import Sequence
 
 import mock
+import pytest
 from dagster import (
     AssetCheckKey,
     AssetKey,
@@ -8,13 +10,39 @@ from dagster import (
     DagsterInstance,
     Definitions,
     SensorResult,
+    _check as check,
+    asset,
     asset_check,
     build_sensor_context,
 )
+from dagster._core.definitions.assets import AssetsDefinition
 from dagster._core.definitions.events import AssetMaterialization
+from dagster._core.definitions.materialize import materialize
+from dagster._core.definitions.metadata.metadata_value import TimestampMetadataValue
+from dagster._core.definitions.sensor_definition import SensorEvaluationContext
+from dagster._core.errors import DagsterInvariantViolationError
+from dagster._core.execution.execute_in_process_result import ExecuteInProcessResult
 from dagster._core.test_utils import freeze_time
 from dagster._serdes import deserialize_value
-from dagster_airlift.core.sensor import AirflowPollingSensorCursor
+from dagster._time import get_current_datetime
+from dagster_airlift.constants import (
+    DAG_ID_TAG_KEY,
+    DAG_RUN_ID_TAG_KEY,
+    EFFECTIVE_TIMESTAMP_METADATA_KEY,
+    TASK_ID_TAG_KEY,
+)
+from dagster_airlift.core import dag_defs, task_defs
+from dagster_airlift.core.airflow_defs_data import AirflowDefinitionsData
+from dagster_airlift.core.load_defs import build_full_automapped_dags_from_airflow_instance
+from dagster_airlift.core.sensor.sensor_builder import (
+    AirflowPollingSensorCursor,
+    AirliftSensorEventTransformerError,
+)
+from dagster_airlift.core.serialization.defs_construction import (
+    key_for_automapped_task_asset,
+    make_default_dag_asset_key,
+)
+from dagster_airlift.test import make_dag_run, make_instance
 
 from dagster_airlift_tests.unit_tests.conftest import (
     assert_expected_key_order,
@@ -344,3 +372,336 @@ def test_no_runs(init_load_context: None, instance: DagsterInstance) -> None:
         assert new_cursor.dag_query_offset == 0
         assert not result.asset_events
         assert not result.run_requests
+
+
+def test_automapped_tasks_only(init_load_context: None, instance: DagsterInstance) -> None:
+    freeze_datetime = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    with freeze_time(freeze_datetime):
+        dag_id = "dag1"
+        dag_runs = [
+            make_dag_run(
+                dag_id=dag_id,
+                run_id=f"run-{dag_id}",
+                start_date=get_current_datetime() - timedelta(minutes=10),
+                end_date=get_current_datetime(),
+            )
+        ]
+
+        airflow_instance = make_instance(
+            dag_and_task_structure={dag_id: ["task1", "task2"]},
+            task_deps={"task1": [], "task2": ["task1"]},
+            dag_runs=dag_runs,
+            instance_name="test_instance",
+        )
+
+        automapped_defs = build_full_automapped_dags_from_airflow_instance(
+            airflow_instance=airflow_instance,
+        )
+
+        repo_def = automapped_defs.get_repository_def()
+
+        sensor = next(iter(repo_def.sensor_defs))
+        context = build_sensor_context(repository_def=repo_def, instance=instance)
+        result = sensor(context)
+        assert isinstance(result, SensorResult)
+
+        asset_mats = check.is_list(result.asset_events, of_type=AssetMaterialization)
+
+        asset_mat_dict = {mat.asset_key: mat for mat in asset_mats}
+
+        am_task1_key = key_for_automapped_task_asset("test_instance", dag_id, "task1")
+        am_task2_key = key_for_automapped_task_asset("test_instance", dag_id, "task2")
+        dag1_asset_key = make_default_dag_asset_key("test_instance", dag_id)
+
+        assert am_task1_key in asset_mat_dict
+        assert am_task2_key in asset_mat_dict
+        assert dag1_asset_key in asset_mat_dict
+
+
+def test_automapped_tasks_with_explicit_external_asset_defs(
+    init_load_context: None, instance: DagsterInstance
+) -> None:
+    freeze_datetime = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    with freeze_time(freeze_datetime):
+        dag_id = "dag1"
+        dag_runs = [
+            make_dag_run(
+                dag_id=dag_id,
+                run_id=f"run-{dag_id}",
+                start_date=get_current_datetime() - timedelta(minutes=10),
+                end_date=get_current_datetime(),
+            )
+        ]
+
+        airflow_instance = make_instance(
+            dag_and_task_structure={dag_id: ["task1", "task2"]},
+            task_deps={"task1": [], "task2": ["task1"]},
+            dag_runs=dag_runs,
+            instance_name="test_instance",
+        )
+
+        explicit_asset1 = AssetSpec(key="explicit_asset1")
+        explicit_asset2 = AssetSpec(key="explicit_asset2")
+
+        automapped_defs = build_full_automapped_dags_from_airflow_instance(
+            airflow_instance=airflow_instance,
+            defs=dag_defs(
+                "dag1",
+                task_defs("task1", Definitions(assets=[explicit_asset1])),
+                task_defs("task2", Definitions(assets=[explicit_asset2])),
+            ),
+        )
+
+        am_task1_key = key_for_automapped_task_asset("test_instance", dag_id, "task1")
+        am_task2_key = key_for_automapped_task_asset("test_instance", dag_id, "task2")
+        dag1_asset_key = make_default_dag_asset_key("test_instance", dag_id)
+
+        spec_dict = {spec.key: spec for spec in automapped_defs.get_all_asset_specs()}
+
+        assert set(spec_dict.keys()) == {
+            am_task1_key,
+            am_task2_key,
+            dag1_asset_key,
+            explicit_asset1.key,
+            explicit_asset2.key,
+        }
+
+        repo_def = automapped_defs.get_repository_def()
+
+        sensor = next(iter(repo_def.sensor_defs))
+        context = build_sensor_context(repository_def=repo_def, instance=instance)
+        result = sensor(context)
+        assert isinstance(result, SensorResult)
+
+        # there should be 5 asset materializations. 1 for dag, 2 for tasks, and 2 for explicit assets
+
+        asset_mats = check.is_list(result.asset_events, of_type=AssetMaterialization)
+
+        asset_mat_dict = {mat.asset_key: mat for mat in asset_mats}
+
+        assert set(asset_mat_dict.keys()) == {
+            am_task1_key,
+            am_task2_key,
+            dag1_asset_key,
+            explicit_asset1.key,
+            explicit_asset2.key,
+        }
+
+
+def test_automapped_tasks_with_explicit_materializable_asset_defs(
+    init_load_context: None, instance: DagsterInstance
+) -> None:
+    freeze_datetime = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    with freeze_time(freeze_datetime):
+        dag_id = "dag1"
+        dag_run_id = f"run-{dag_id}"
+        dag_runs = [
+            make_dag_run(
+                dag_id=dag_id,
+                run_id=f"run-{dag_id}",
+                start_date=get_current_datetime() - timedelta(minutes=10),
+                end_date=get_current_datetime(),
+            )
+        ]
+
+        airflow_instance = make_instance(
+            dag_and_task_structure={dag_id: ["task1", "task2"]},
+            task_deps={"task1": [], "task2": ["task1"]},
+            dag_runs=dag_runs,
+            instance_name="test_instance",
+        )
+
+        @asset
+        def explicit_asset1() -> None:
+            pass
+
+        @asset
+        def explicit_asset2() -> None:
+            pass
+
+        automapped_defs = build_full_automapped_dags_from_airflow_instance(
+            airflow_instance=airflow_instance,
+            defs=dag_defs(
+                "dag1",
+                task_defs("task1", Definitions(assets=[explicit_asset1])),
+                task_defs("task2", Definitions(assets=[explicit_asset2])),
+            ),
+        )
+
+        am_task1_key = key_for_automapped_task_asset("test_instance", dag_id, "task1")
+        am_task2_key = key_for_automapped_task_asset("test_instance", dag_id, "task2")
+        dag1_asset_key = make_default_dag_asset_key("test_instance", dag_id)
+
+        spec_dict = {spec.key: spec for spec in automapped_defs.get_all_asset_specs()}
+
+        assert set(spec_dict.keys()) == {
+            am_task1_key,
+            am_task2_key,
+            dag1_asset_key,
+            explicit_asset1.key,
+            explicit_asset2.key,
+        }
+
+        repo_def = automapped_defs.get_repository_def()
+
+        # we simulate runs from the proxy operator for both tasks
+        assert simulate_materialize_from_proxy_operator(
+            instance=instance,
+            assets_def=explicit_asset1,
+            dag_id=dag_id,
+            task_id="task1",
+            dag_run_id=dag_run_id,
+        ).success
+        assert simulate_materialize_from_proxy_operator(
+            instance=instance,
+            assets_def=explicit_asset1,
+            dag_id=dag_id,
+            task_id="task2",
+            dag_run_id=dag_run_id,
+        ).success
+
+        sensor = next(iter(repo_def.sensor_defs))
+        context = build_sensor_context(repository_def=repo_def, instance=instance)
+        result = sensor(context)
+        assert isinstance(result, SensorResult)
+
+        # there should be 3 asset materializations. 1 for dag, 2 for automapped tasks
+
+        asset_mats = check.is_list(result.asset_events, of_type=AssetMaterialization)
+
+        asset_mat_dict = {mat.asset_key: mat for mat in asset_mats}
+
+        assert set(asset_mat_dict.keys()) == {
+            am_task1_key,
+            am_task2_key,
+            dag1_asset_key,
+            # explicit_asset1.key, # no syntheic materialization for explicit asset as it was proxied
+            # explicit_asset2.key, # no syntheic materialization for explicit asset as it waws proxied
+        }
+
+
+def simulate_materialize_from_proxy_operator(
+    *,
+    instance: DagsterInstance,
+    assets_def: AssetsDefinition,
+    dag_run_id: str,
+    dag_id: str,
+    task_id: str,
+) -> ExecuteInProcessResult:
+    # TODO consolidate with code in proxy operator
+    tags = {
+        DAG_ID_TAG_KEY: dag_id,
+        DAG_RUN_ID_TAG_KEY: dag_run_id,
+        TASK_ID_TAG_KEY: task_id,
+    }
+    return materialize(assets=[assets_def], instance=instance, tags=tags)
+
+
+def test_pluggable_transformation(init_load_context: None, instance: DagsterInstance) -> None:
+    """Test the case where a custom transformation is provided to the sensor."""
+
+    def pluggable_event_transformer(
+        context: SensorEvaluationContext,
+        airflow_data: AirflowDefinitionsData,
+        events: Sequence[AssetMaterialization],
+    ) -> Sequence[AssetMaterialization]:
+        assert isinstance(context, SensorEvaluationContext)
+        assert isinstance(airflow_data, AirflowDefinitionsData)
+        # Change the timestamp, which should also change the order. We expect this to be respected by the sensor.
+        new_events = []
+        for event in events:
+            if AssetKey(["a"]) == event.asset_key:
+                new_events.append(
+                    event._replace(
+                        metadata={
+                            "test": "test",
+                            EFFECTIVE_TIMESTAMP_METADATA_KEY: TimestampMetadataValue(1.0),
+                        }
+                    )
+                )
+            elif AssetKey.from_user_string(make_dag_key_str("dag")) == event.asset_key:
+                new_events.append(
+                    event._replace(
+                        metadata={
+                            "test": "test",
+                            EFFECTIVE_TIMESTAMP_METADATA_KEY: TimestampMetadataValue(0.0),
+                        }
+                    )
+                )
+        return new_events
+
+    result, context = build_and_invoke_sensor(
+        assets_per_task={
+            "dag": {"task": [("a", [])]},
+        },
+        instance=instance,
+        event_transformer_fn=pluggable_event_transformer,
+    )
+    assert len(result.asset_events) == 2
+    assert_expected_key_order(result.asset_events, [make_dag_key_str("dag"), "a"])
+    for event in result.asset_events:
+        assert set(event.metadata.keys()) == {"test", EFFECTIVE_TIMESTAMP_METADATA_KEY}
+
+
+def test_user_code_error_pluggable_transformation(
+    init_load_context: None, instance: DagsterInstance
+) -> None:
+    """Test the case where a custom transformation is provided to the sensor, and the user code raises an error."""
+
+    def pluggable_event_transformer(
+        context: SensorEvaluationContext,
+        airflow_data: AirflowDefinitionsData,
+        events: Sequence[AssetMaterialization],
+    ) -> Sequence[AssetMaterialization]:
+        raise ValueError("User code error")
+
+    with pytest.raises(AirliftSensorEventTransformerError):
+        build_and_invoke_sensor(
+            assets_per_task={
+                "dag": {"task": [("a", [])]},
+            },
+            instance=instance,
+            event_transformer_fn=pluggable_event_transformer,
+        )
+
+
+def test_missing_effective_timestamp_pluggable_impl(
+    init_load_context: None, instance: DagsterInstance
+) -> None:
+    """Test the case where a custom transformation is provided to the sensor, and the user doesn't include effective timestamp metadata."""
+
+    def missing_effective_timestamp(
+        context: SensorEvaluationContext,
+        airflow_data: AirflowDefinitionsData,
+        events: Sequence[AssetMaterialization],
+    ) -> Sequence[AssetMaterialization]:
+        return [event._replace(metadata={}) for event in events]
+
+    with pytest.raises(DagsterInvariantViolationError):
+        build_and_invoke_sensor(
+            assets_per_task={
+                "dag": {"task": [("a", [])]},
+            },
+            instance=instance,
+            event_transformer_fn=missing_effective_timestamp,
+        )
+
+
+def test_nonsense_result_pluggable_impl(init_load_context: None, instance: DagsterInstance) -> None:
+    """Test the case where a nonsense result is returned from the custom transformation."""
+
+    def nonsense_result(
+        context: SensorEvaluationContext,
+        airflow_data: AirflowDefinitionsData,
+        events: Sequence[AssetMaterialization],
+    ) -> Sequence[AssetMaterialization]:
+        return [1, 2, 3]  # type: ignore # intentionally wrong
+
+    with pytest.raises(DagsterInvariantViolationError):
+        build_and_invoke_sensor(
+            assets_per_task={
+                "dag": {"task": [("a", [])]},
+            },
+            instance=instance,
+            event_transformer_fn=nonsense_result,
+        )

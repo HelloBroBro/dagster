@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Iterable, Iterator, List, Optional, Sequence, Set
 
 from dagster import (
     AssetCheckKey,
@@ -12,10 +12,17 @@ from dagster import (
     _check as check,
     sensor,
 )
+from dagster._core.definitions.asset_check_evaluation import AssetCheckEvaluation
 from dagster._core.definitions.asset_selection import AssetSelection
 from dagster._core.definitions.definitions_class import Definitions
+from dagster._core.definitions.events import AssetObservation
 from dagster._core.definitions.repository_definition.repository_definition import (
     RepositoryDefinition,
+)
+from dagster._core.errors import (
+    DagsterInvariantViolationError,
+    DagsterUserCodeExecutionError,
+    user_code_error_boundary,
 )
 from dagster._core.storage.dagster_run import RunsFilter
 from dagster._grpc.client import DEFAULT_SENSOR_GRPC_TIMEOUT
@@ -24,14 +31,21 @@ from dagster._serdes import deserialize_value, serialize_value
 from dagster._serdes.serdes import whitelist_for_serdes
 from dagster._time import datetime_from_timestamp, get_current_datetime
 
-from dagster_airlift.constants import DAG_RUN_ID_TAG_KEY, TASK_ID_TAG_KEY
+from dagster_airlift.constants import (
+    AUTOMAPPED_TASK_METADATA_KEY,
+    DAG_RUN_ID_TAG_KEY,
+    EFFECTIVE_TIMESTAMP_METADATA_KEY,
+    TASK_ID_TAG_KEY,
+)
 from dagster_airlift.core.airflow_defs_data import AirflowDefinitionsData
-from dagster_airlift.core.airflow_instance import AirflowInstance, DagRun
+from dagster_airlift.core.airflow_instance import AirflowInstance, DagRun, TaskInstance
 from dagster_airlift.core.sensor.event_translation import (
-    AirflowEventTranslationFn,
+    AssetEvent,
+    DagsterEventTransformerFn,
     get_timestamp_from_materialization,
     materializations_for_dag_run,
-    materializations_for_task_instance,
+    synthetic_mats_for_mapped_asset_keys,
+    synthetic_mats_for_task_instance,
 )
 
 MAIN_LOOP_TIMEOUT_SECONDS = DEFAULT_SENSOR_GRPC_TIMEOUT - 20
@@ -49,6 +63,10 @@ class AirflowPollingSensorCursor:
     dag_query_offset: Optional[int] = None
 
 
+class AirliftSensorEventTransformerError(DagsterUserCodeExecutionError):
+    """Error raised when an error occurs in the event transformer function."""
+
+
 def check_keys_for_asset_keys(
     repository_def: RepositoryDefinition, asset_keys: Set[AssetKey]
 ) -> Iterable[AssetCheckKey]:
@@ -59,10 +77,35 @@ def check_keys_for_asset_keys(
 
 
 def build_airflow_polling_sensor_defs(
-    airflow_data: AirflowDefinitionsData,
-    event_translation_fn: AirflowEventTranslationFn,
+    *,
+    mapped_defs: Definitions,
+    airflow_instance: AirflowInstance,
+    event_transformer_fn: Optional[DagsterEventTransformerFn],
     minimum_interval_seconds: int = DEFAULT_AIRFLOW_SENSOR_INTERVAL_SECONDS,
 ) -> Definitions:
+    """The constructed sensor polls the Airflow instance for activity, and inserts asset events into Dagster's event log.
+
+    The sensor decides which Airflow dags and tasks to monitor by inspecting the metadata of the passed-in Definitions object `mapped_defs`.
+    The metadata performing this mapping is typically set by calls to `dag_defs` and `task_defs`.
+
+    Using the `event_transformer_fn` argument, users can provide a function that transforms the materializations emitted by the sensor.
+    The expected return type of this function is an iterable of `AssetMaterialization`, `AssetObservation`, or `AssetCheckEvaluation` objects.
+    Each object is expected to have a metadata key `dagster_airlift.constants.EFFECTIVE_TIMESTAMP_METADATA_KEY` which is a `dagster.TimestampMetadataValue` set.
+    This allows Dagster to correctly order the materializations in the event stream.
+
+    Args:
+        mapped_defs (Definitions): The `Definitions` object containing assets with metadata mapping them to Airflow dags and tasks.
+        airflow_instance (AirflowInstance): The Airflow instance to poll for dag runs.
+        event_transformer_fn (Optional[DagsterEventTransformerFn]): A function that transforms the materializations emitted by the sensor.
+        minimum_interval_seconds (int): The minimum interval in seconds between sensor runs. Defaults to 1.
+
+    Returns:
+        Definitions: A `Definitions` object containing the constructed sensor.
+    """
+    airflow_data = AirflowDefinitionsData(
+        airflow_instance=airflow_instance, mapped_defs=mapped_defs
+    )
+
     @sensor(
         name=f"{airflow_data.airflow_instance.name}__airflow_dag_status_sensor",
         minimum_interval_seconds=minimum_interval_seconds,
@@ -72,7 +115,9 @@ def build_airflow_polling_sensor_defs(
     )
     def airflow_dag_sensor(context: SensorEvaluationContext) -> SensorResult:
         """Sensor to report materialization events for each asset as new runs come in."""
-        context.log.info(f"Running sensor for {airflow_data.airflow_instance.name}")
+        context.log.info(
+            f"************Running sensor for {airflow_data.airflow_instance.name}***********"
+        )
         try:
             cursor = (
                 deserialize_value(context.cursor, AirflowPollingSensorCursor)
@@ -95,9 +140,8 @@ def build_airflow_polling_sensor_defs(
             end_date_lte=end_date_lte,
             offset=current_dag_offset,
             airflow_data=airflow_data,
-            event_translation_fn=event_translation_fn,
         )
-        all_materializations: List[Tuple[float, AssetMaterialization]] = []
+        all_asset_events: List[AssetMaterialization] = []
         all_check_keys: Set[AssetCheckKey] = set()
         latest_offset = current_dag_offset
         repository_def = check.not_none(context.repository_def)
@@ -105,7 +149,7 @@ def build_airflow_polling_sensor_defs(
             batch_result = next(sensor_iter, None)
             if batch_result is None:
                 break
-            all_materializations.extend(batch_result.materializations_and_timestamps)
+            all_asset_events.extend(batch_result.asset_events)
 
             all_check_keys.update(
                 check_keys_for_asset_keys(repository_def, batch_result.all_asset_keys_materialized)
@@ -125,10 +169,20 @@ def build_airflow_polling_sensor_defs(
                 end_date_lte=None,
                 dag_query_offset=0,
             )
+        updated_asset_events = _get_transformer_result(
+            event_transformer_fn=event_transformer_fn,
+            context=context,
+            airflow_data=airflow_data,
+            all_asset_events=all_asset_events,
+        )
+
         context.update_cursor(serialize_value(new_cursor))
 
+        context.log.info(
+            f"************Exiting sensor for {airflow_data.airflow_instance.name}***********"
+        )
         return SensorResult(
-            asset_events=sorted_asset_events(all_materializations, repository_def),
+            asset_events=sorted_asset_events(updated_asset_events, repository_def),
             run_requests=[RunRequest(asset_check_keys=list(all_check_keys))]
             if all_check_keys
             else None,
@@ -138,23 +192,55 @@ def build_airflow_polling_sensor_defs(
 
 
 def sorted_asset_events(
-    all_materializations: List[Tuple[float, AssetMaterialization]],
+    asset_events: Sequence[AssetEvent],
     repository_def: RepositoryDefinition,
-) -> List[AssetMaterialization]:
+) -> List[AssetEvent]:
     """Sort materializations by end date and toposort order."""
     topo_aks = repository_def.asset_graph.toposorted_asset_keys
+    materializations_and_timestamps = [
+        (get_timestamp_from_materialization(mat), mat) for mat in asset_events
+    ]
     return [
-        sorted_mat[1]
-        for sorted_mat in sorted(
-            all_materializations, key=lambda x: (x[0], topo_aks.index(x[1].asset_key))
+        sorted_event[1]
+        for sorted_event in sorted(
+            materializations_and_timestamps, key=lambda x: (x[0], topo_aks.index(x[1].asset_key))
         )
     ]
+
+
+def _get_transformer_result(
+    event_transformer_fn: Optional[DagsterEventTransformerFn],
+    context: SensorEvaluationContext,
+    airflow_data: AirflowDefinitionsData,
+    all_asset_events: Sequence[AssetMaterialization],
+) -> Sequence[AssetEvent]:
+    if not event_transformer_fn:
+        return all_asset_events
+
+    with user_code_error_boundary(
+        AirliftSensorEventTransformerError,
+        lambda: f"Error occurred during event transformation for {airflow_data.airflow_instance.name}",
+    ):
+        updated_asset_events = list(event_transformer_fn(context, airflow_data, all_asset_events))
+
+    for asset_event in updated_asset_events:
+        if not isinstance(
+            asset_event, (AssetMaterialization, AssetObservation, AssetCheckEvaluation)
+        ):
+            raise DagsterInvariantViolationError(
+                f"Event transformer function must return AssetMaterialization, AssetObservation, or AssetCheckEvaluation objects. Got {type(asset_event)}."
+            )
+        if EFFECTIVE_TIMESTAMP_METADATA_KEY not in asset_event.metadata:
+            raise DagsterInvariantViolationError(
+                f"All returned events must have an effective timestamp, but {asset_event} does not. An effective timestamp can be used by setting dagster_airlift.constants.EFFECTIVE_TIMESTAMP_METADATA_KEY with a dagster.TimestampMetadataValue."
+            )
+    return updated_asset_events
 
 
 @record
 class BatchResult:
     idx: int
-    materializations_and_timestamps: List[Tuple[float, AssetMaterialization]]
+    asset_events: Sequence[AssetMaterialization]
     all_asset_keys_materialized: Set[AssetKey]
 
 
@@ -164,7 +250,6 @@ def materializations_and_requests_from_batch_iter(
     end_date_lte: float,
     offset: int,
     airflow_data: AirflowDefinitionsData,
-    event_translation_fn: AirflowEventTranslationFn,
 ) -> Iterator[Optional[BatchResult]]:
     runs = airflow_data.airflow_instance.get_dag_runs_batch(
         dag_ids=list(airflow_data.all_dag_ids),
@@ -172,8 +257,10 @@ def materializations_and_requests_from_batch_iter(
         end_date_lte=datetime_from_timestamp(end_date_lte),
         offset=offset,
     )
+    context.log.info(f"Found {len(runs)} dag runs for {airflow_data.airflow_instance.name}")
+    context.log.info(f"All runs {runs}")
     for i, dag_run in enumerate(runs):
-        # TODO: add pluggability here (ignoring `event_translation_fn` for now)
+        # TODO: add pluggability here (ignoring `event_transformer_fn` for now)
 
         dag_mats = materializations_for_dag_run(dag_run, airflow_data)
         synthetic_mats = build_synthetic_asset_materializations(
@@ -186,9 +273,7 @@ def materializations_and_requests_from_batch_iter(
         yield (
             BatchResult(
                 idx=i + offset,
-                materializations_and_timestamps=[
-                    (get_timestamp_from_materialization(mat), mat) for mat in mats
-                ],
+                asset_events=mats,
                 all_asset_keys_materialized=all_asset_keys_materialized,
             )
             if mats
@@ -225,11 +310,12 @@ def build_synthetic_asset_materializations(
     task_instances = airflow_instance.get_task_instance_batch(
         run_id=dag_run.run_id,
         dag_id=dag_run.dag_id,
-        task_ids=[
-            task_id for task_id in airflow_data.serialized_data.task_ids_in_dag(dag_run.dag_id)
-        ],
+        task_ids=[task_id for task_id in airflow_data.task_ids_in_dag(dag_run.dag_id)],
         states=["success"],
     )
+
+    context.log.info(f"Found {len(task_instances)} task instances for {dag_run.run_id}")
+    context.log.info(f"All task instances {task_instances}")
 
     check.invariant(
         len({ti.task_id for ti in task_instances}) == len(task_instances),
@@ -256,8 +342,36 @@ def build_synthetic_asset_materializations(
         # If there is no dagster_run for this task, it was not proxied.
         # Therefore synthensize a materialization based on the task information.
         if task_id not in dagster_runs_by_task_id:
+            context.log.info(
+                f"Synthesizing materialization for tasks {task_id} in dag {dag_run.dag_id} because no dagster run found."
+            )
             synthetic_mats.extend(
-                materializations_for_task_instance(airflow_data, dag_run, task_instance)
+                synthetic_mats_for_task_instance(airflow_data, dag_run, task_instance)
+            )
+        else:
+            # We *always* emit for the automapped tasks, even if they are proxied
+            asset_keys_to_emit = automapped_tasks_asset_keys(dag_run, airflow_data, task_instance)
+
+            synthetic_mats.extend(
+                synthetic_mats_for_mapped_asset_keys(
+                    dag_run=dag_run, task_instance=task_instance, asset_keys=asset_keys_to_emit
+                )
+            )
+
+            context.log.info(
+                f"Dagster run found for task {task_id} in dag {dag_run.dag_id}. Run {dagster_runs_by_task_id[task_id].run_id}"
             )
 
     return synthetic_mats
+
+
+def automapped_tasks_asset_keys(
+    dag_run: DagRun, airflow_data: AirflowDefinitionsData, task_instance: TaskInstance
+) -> Set[AssetKey]:
+    asset_keys_to_emit = set()
+    asset_keys = airflow_data.asset_keys_in_task(dag_run.dag_id, task_instance.task_id)
+    for asset_key in asset_keys:
+        spec = airflow_data.mapped_defs.get_assets_def(asset_key).get_asset_spec(asset_key)
+        if spec.metadata.get(AUTOMAPPED_TASK_METADATA_KEY):
+            asset_keys_to_emit.add(asset_key)
+    return asset_keys_to_emit
