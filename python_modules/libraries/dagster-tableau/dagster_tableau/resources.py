@@ -1,5 +1,4 @@
 import datetime
-import json
 import logging
 import time
 import uuid
@@ -10,7 +9,6 @@ from typing import List, Mapping, Optional, Sequence, Type, Union
 import jwt
 import requests
 import tableauserverclient as TSC
-import xmltodict
 from dagster import (
     AssetsDefinition,
     ConfigurableResource,
@@ -72,11 +70,10 @@ class BaseTableauClient:
         return get_dagster_logger()
 
     @cached_method
-    def get_workbooks(self) -> Mapping[str, object]:
+    def get_workbooks(self) -> List[TSC.WorkbookItem]:
         """Fetches a list of all Tableau workbooks in the workspace."""
-        return self._response_to_dict(
-            self._server.workbooks.get_request(self._server.workbooks.baseurl)
-        )
+        workbooks, _ = self._server.workbooks.get()
+        return workbooks
 
     @cached_method
     def get_workbook(self, workbook_id) -> Mapping[str, object]:
@@ -89,11 +86,9 @@ class BaseTableauClient:
     def get_view(
         self,
         view_id: str,
-    ) -> Mapping[str, object]:
+    ) -> TSC.ViewItem:
         """Fetches information for a given view."""
-        return self._response_to_dict(
-            self._server.views.get_request(f"{self._server.views.baseurl}/{view_id}")
-        )
+        return self._server.views.get_by_id(view_id)
 
     def get_job(
         self,
@@ -105,9 +100,9 @@ class BaseTableauClient:
     def cancel_job(
         self,
         job_id: str,
-    ) -> Mapping[str, object]:
-        """Fetches information for a given job."""
-        return self._response_to_dict(self._server.jobs.cancel(job_id))
+    ) -> requests.Response:
+        """Cancels a given job."""
+        return self._server.jobs.cancel(job_id)
 
     def refresh_workbook(self, workbook_id) -> TSC.JobItem:
         """Refreshes all extracts for a given workbook and return the JobItem object."""
@@ -164,6 +159,39 @@ class BaseTableauClient:
 
         return job.workbook_id
 
+    def add_data_quality_warning_to_data_source(
+        self,
+        data_source_id: str,
+        warning_type: Optional[TSC.DQWItem.WarningType] = None,
+        message: Optional[str] = None,
+        active: Optional[bool] = None,
+        severe: Optional[bool] = None,
+    ) -> Sequence[TSC.DQWItem]:
+        """Add a data quality warning to a data source.
+
+        Args:
+            data_source_id (str): The ID of the data source for which a data quality warning is to be added.
+            warning_type (Optional[tableauserverclient.DQWItem.WarningType]): The warning type
+                for the data quality warning. Defaults to `TSC.DQWItem.WarningType.WARNING`.
+            message (Optional[str]): The message for the data quality warning. Defaults to `None`.
+            active (Optional[bool]): Whether the data quality warning is active or not. Defaults to `True`.
+            severe (Optional[bool]): Whether the data quality warning is sever or not. Defaults to `False`.
+
+        Returns:
+            Sequence[tableauserverclient.DQWItem]: The list of tableauserverclient.DQWItems which
+                exist for the data source.
+        """
+        data_source: TSC.DatasourceItem = self._server.datasources.get_by_id(
+            datasource_id=data_source_id
+        )
+        warning: TSC.DQWItem = TSC.DQWItem(
+            warning_type=str(warning_type) or TSC.DQWItem.WarningType.WARNING,
+            message=message,
+            active=active or True,
+            severe=severe or False,
+        )
+        return self._server.datasources.add_dqw(item=data_source, warning=warning)
+
     def sign_in(self) -> Auth.contextmgr:
         """Sign in to the site in Tableau."""
         jwt_token = jwt.encode(
@@ -182,12 +210,6 @@ class BaseTableauClient:
 
         tableau_auth = TSC.JWTAuth(jwt_token, site_id=self.site_name)  # pyright: ignore (reportAttributeAccessIssue)
         return self._server.auth.sign_in(tableau_auth)
-
-    @staticmethod
-    def _response_to_dict(response: requests.Response):
-        return json.loads(
-            json.dumps(xmltodict.parse(response.text, attr_prefix="", cdata_key="")["tsResponse"])
-        )
 
     @property
     def workbook_graphql_query(self) -> str:
@@ -329,8 +351,7 @@ class BaseTableauWorkspace(ConfigurableResource):
             TableauWorkspaceData: A snapshot of the Tableau workspace's content.
         """
         with self.get_client() as client:
-            workbooks_data = client.get_workbooks()["workbooks"]
-            workbook_ids = [workbook["id"] for workbook in workbooks_data["workbook"]]
+            workbook_ids = [workbook.id for workbook in client.get_workbooks()]
 
             workbooks_by_id = {}
             sheets_by_id = {}
@@ -565,7 +586,7 @@ class TableauCacheableAssetsDefinition(CacheableAssetsDefinition):
                     *workspace_data.sheets_by_id.items(),
                     *workspace_data.dashboards_by_id.items(),
                 ]:
-                    data = client.get_view(view_id)["view"]
+                    data = client.get_view(view_id)
                     if view_content_data.content_type == TableauContentType.SHEET:
                         asset_key = translator.get_sheet_asset_key(view_content_data)
                     elif view_content_data.content_type == TableauContentType.DASHBOARD:
@@ -577,24 +598,32 @@ class TableauCacheableAssetsDefinition(CacheableAssetsDefinition):
                             value=None,
                             output_name="__".join(asset_key.path),
                             metadata={
-                                "workbook_id": data["workbook"]["id"],
-                                "owner_id": data["owner"]["id"],
-                                "name": data["name"],
-                                "contentUrl": data["contentUrl"],
-                                "createdAt": data["createdAt"],
-                                "updatedAt": data["updatedAt"],
+                                "workbook_id": data.workbook_id,
+                                "owner_id": data.owner_id,
+                                "name": data.name,
+                                "contentUrl": data.content_url,
+                                "createdAt": data.created_at.strftime("%Y-%m-%dT%H:%M:%S")
+                                if data.created_at
+                                else None,
+                                "updatedAt": data.updated_at.strftime("%Y-%m-%dT%H:%M:%S")
+                                if data.updated_at
+                                else None,
                             },
                         )
                     else:
                         yield ObserveResult(
                             asset_key=asset_key,
                             metadata={
-                                "workbook_id": data["workbook"]["id"],
-                                "owner_id": data["owner"]["id"],
-                                "name": data["name"],
-                                "contentUrl": data["contentUrl"],
-                                "createdAt": data["createdAt"],
-                                "updatedAt": data["updatedAt"],
+                                "workbook_id": data.workbook_id,
+                                "owner_id": data.owner_id,
+                                "name": data.name,
+                                "contentUrl": data.content_url,
+                                "createdAt": data.created_at.strftime("%Y-%m-%dT%H:%M:%S")
+                                if data.created_at
+                                else None,
+                                "updatedAt": data.updated_at.strftime("%Y-%m-%dT%H:%M:%S")
+                                if data.updated_at
+                                else None,
                             },
                         )
 
