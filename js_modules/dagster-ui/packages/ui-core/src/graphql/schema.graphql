@@ -1440,6 +1440,7 @@ type Run implements PipelineRun & RunsFeedEntry {
   hasConcurrencyKeySlots: Boolean!
   rootConcurrencyKeys: [String!]
   hasUnconstrainedRootNodes: Boolean!
+  hasRunMetricsEnabled: Boolean!
 }
 
 interface RunsFeedEntry {
@@ -1718,6 +1719,7 @@ type AssetKey {
 union LaunchBackfillResult =
     LaunchBackfillSuccess
   | PartitionSetNotFoundError
+  | PartitionKeysNotFoundError
   | InvalidStepError
   | InvalidOutputError
   | RunConfigValidationInvalid
@@ -1729,6 +1731,11 @@ union LaunchBackfillResult =
   | PresetNotFoundError
   | ConflictingExecutionParamsError
   | NoModeProvidedError
+
+type PartitionKeysNotFoundError implements Error {
+  message: String!
+  partitionKeys: [String!]!
+}
 
 type LaunchBackfillSuccess {
   backfillId: String!
@@ -3200,6 +3207,7 @@ type TableColumn {
   type: String!
   description: String
   constraints: TableColumnConstraints!
+  tags: [DefinitionTag!]!
 }
 
 type TableColumnConstraints {

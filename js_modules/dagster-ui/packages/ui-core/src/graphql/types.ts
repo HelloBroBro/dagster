@@ -2193,6 +2193,7 @@ export type LaunchBackfillResult =
   | InvalidSubsetError
   | LaunchBackfillSuccess
   | NoModeProvidedError
+  | PartitionKeysNotFoundError
   | PartitionSetNotFoundError
   | PipelineNotFoundError
   | PresetNotFoundError
@@ -3160,6 +3161,12 @@ export type PartitionKeyRange = {
 
 export type PartitionKeys = {
   __typename: 'PartitionKeys';
+  partitionKeys: Array<Scalars['String']['output']>;
+};
+
+export type PartitionKeysNotFoundError = Error & {
+  __typename: 'PartitionKeysNotFoundError';
+  message: Scalars['String']['output'];
   partitionKeys: Array<Scalars['String']['output']>;
 };
 
@@ -4435,6 +4442,7 @@ export type Run = PipelineRun &
     hasConcurrencyKeySlots: Scalars['Boolean']['output'];
     hasDeletePermission: Scalars['Boolean']['output'];
     hasReExecutePermission: Scalars['Boolean']['output'];
+    hasRunMetricsEnabled: Scalars['Boolean']['output'];
     hasTerminatePermission: Scalars['Boolean']['output'];
     hasUnconstrainedRootNodes: Scalars['Boolean']['output'];
     id: Scalars['ID']['output'];
@@ -5383,6 +5391,7 @@ export type TableColumn = {
   constraints: TableColumnConstraints;
   description: Maybe<Scalars['String']['output']>;
   name: Scalars['String']['output'];
+  tags: Array<DefinitionTag>;
   type: Scalars['String']['output'];
 };
 
@@ -10949,6 +10958,20 @@ export const buildPartitionKeys = (
   };
 };
 
+export const buildPartitionKeysNotFoundError = (
+  overrides?: Partial<PartitionKeysNotFoundError>,
+  _relationshipsToOmit: Set<string> = new Set(),
+): {__typename: 'PartitionKeysNotFoundError'} & PartitionKeysNotFoundError => {
+  const relationshipsToOmit: Set<string> = new Set(_relationshipsToOmit);
+  relationshipsToOmit.add('PartitionKeysNotFoundError');
+  return {
+    __typename: 'PartitionKeysNotFoundError',
+    message: overrides && overrides.hasOwnProperty('message') ? overrides.message! : 'minima',
+    partitionKeys:
+      overrides && overrides.hasOwnProperty('partitionKeys') ? overrides.partitionKeys! : [],
+  };
+};
+
 export const buildPartitionMapping = (
   overrides?: Partial<PartitionMapping>,
   _relationshipsToOmit: Set<string> = new Set(),
@@ -12981,6 +13004,10 @@ export const buildRun = (
       overrides && overrides.hasOwnProperty('hasReExecutePermission')
         ? overrides.hasReExecutePermission!
         : true,
+    hasRunMetricsEnabled:
+      overrides && overrides.hasOwnProperty('hasRunMetricsEnabled')
+        ? overrides.hasRunMetricsEnabled!
+        : false,
     hasTerminatePermission:
       overrides && overrides.hasOwnProperty('hasTerminatePermission')
         ? overrides.hasTerminatePermission!
@@ -14670,6 +14697,7 @@ export const buildTableColumn = (
     description:
       overrides && overrides.hasOwnProperty('description') ? overrides.description! : 'illum',
     name: overrides && overrides.hasOwnProperty('name') ? overrides.name! : 'explicabo',
+    tags: overrides && overrides.hasOwnProperty('tags') ? overrides.tags! : [],
     type: overrides && overrides.hasOwnProperty('type') ? overrides.type! : 'a',
   };
 };
