@@ -57,9 +57,9 @@ from dagster.version import __version__ as dagster_module_version
 
 if TYPE_CHECKING:
     from dagster._core.remote_representation.external import (
-        ExternalJob,
-        ExternalRepository,
-        ExternalResource,
+        RemoteJob,
+        RemoteRepository,
+        RemoteResource,
     )
     from dagster._core.workspace.context import IWorkspaceProcessContext
 
@@ -458,7 +458,7 @@ def hash_name(name: str) -> str:
     return hashlib.sha256(name.encode("utf-8")).hexdigest()
 
 
-def get_stats_from_external_repo(external_repo: "ExternalRepository") -> Mapping[str, str]:
+def get_stats_from_external_repo(external_repo: "RemoteRepository") -> Mapping[str, str]:
     from dagster._core.remote_representation.external_data import (
         DynamicPartitionsSnap,
         MultiPartitionsSnap,
@@ -471,9 +471,9 @@ def get_stats_from_external_repo(external_repo: "ExternalRepository") -> Mapping
     num_assets_in_repo = len(asset_node_snaps)
     external_resources = external_repo.get_external_resources()
 
-    num_checks = len(external_repo.external_repository_data.external_asset_checks or [])
+    num_checks = len(external_repo.external_repository_data.asset_check_nodes or [])
     num_assets_with_checks = len(
-        {c.asset_key for c in external_repo.external_repository_data.external_asset_checks or []}
+        {c.asset_key for c in external_repo.external_repository_data.asset_check_nodes or []}
     )
 
     num_partitioned_assets_in_repo = 0
@@ -566,7 +566,7 @@ def get_stats_from_external_repo(external_repo: "ExternalRepository") -> Mapping
     }
 
 
-def get_resource_stats(external_resources: Sequence["ExternalResource"]) -> Mapping[str, Any]:
+def get_resource_stats(external_resources: Sequence["RemoteResource"]) -> Mapping[str, Any]:
     used_dagster_resources = []
     used_custom_resources = False
 
@@ -590,15 +590,15 @@ def get_resource_stats(external_resources: Sequence["ExternalResource"]) -> Mapp
 def log_external_repo_stats(
     instance: DagsterInstance,
     source: str,
-    external_repo: "ExternalRepository",
-    external_job: Optional["ExternalJob"] = None,
+    external_repo: "RemoteRepository",
+    external_job: Optional["RemoteJob"] = None,
 ):
-    from dagster._core.remote_representation.external import ExternalJob, ExternalRepository
+    from dagster._core.remote_representation.external import RemoteJob, RemoteRepository
 
     check.inst_param(instance, "instance", DagsterInstance)
     check.str_param(source, "source")
-    check.inst_param(external_repo, "external_repo", ExternalRepository)
-    check.opt_inst_param(external_job, "external_job", ExternalJob)
+    check.inst_param(external_repo, "external_repo", RemoteRepository)
+    check.opt_inst_param(external_job, "external_job", RemoteJob)
 
     if _get_instance_telemetry_enabled(instance):
         instance_id = get_or_set_instance_id()

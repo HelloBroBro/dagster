@@ -7,20 +7,19 @@ that have been persisted. e.g. HistoricalPipeline
 """
 
 from dagster._core.remote_representation.external import (
-    ExternalExecutionPlan as ExternalExecutionPlan,
-    ExternalJob as ExternalJob,
-    ExternalPartitionSet as ExternalPartitionSet,
-    ExternalRepository as ExternalRepository,
-    ExternalSchedule as ExternalSchedule,
-    ExternalSensor as ExternalSensor,
+    RemoteExecutionPlan as RemoteExecutionPlan,
+    RemoteJob as RemoteJob,
+    RemotePartitionSet as RemotePartitionSet,
+    RemoteRepository as RemoteRepository,
+    RemoteSchedule as RemoteSchedule,
+    RemoteSensor as RemoteSensor,
 )
 from dagster._core.remote_representation.external_data import (
     ExecutionParamsErrorSnap as ExecutionParamsErrorSnap,
     ExecutionParamsSnap as ExecutionParamsSnap,
-    ExternalJobData as ExternalJobData,
-    ExternalJobRef as ExternalJobRef,
     ExternalJobSubsetResult as ExternalJobSubsetResult,
-    ExternalRepositoryData as ExternalRepositoryData,
+    JobDataSnap as JobDataSnap,
+    JobRefSnap as JobRefSnap,
     PartitionConfigSnap as PartitionConfigSnap,
     PartitionExecutionErrorSnap as PartitionExecutionErrorSnap,
     PartitionNamesSnap as PartitionNamesSnap,
@@ -29,13 +28,13 @@ from dagster._core.remote_representation.external_data import (
     PartitionTagsSnap as PartitionTagsSnap,
     PresetSnap as PresetSnap,
     RepositoryErrorSnap as RepositoryErrorSnap,
+    RepositorySnap as RepositorySnap,
     ScheduleExecutionErrorSnap as ScheduleExecutionErrorSnap,
     ScheduleSnap as ScheduleSnap,
     SensorExecutionErrorSnap as SensorExecutionErrorSnap,
     SensorSnap as SensorSnap,
     TargetSnap as TargetSnap,
     external_job_data_from_def as external_job_data_from_def,
-    external_repository_data_from_def as external_repository_data_from_def,
 )
 from dagster._core.remote_representation.handle import (
     JobHandle as JobHandle,

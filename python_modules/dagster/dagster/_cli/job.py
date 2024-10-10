@@ -38,15 +38,15 @@ from dagster._core.execution.job_backfill import create_backfill_run
 from dagster._core.instance import DagsterInstance
 from dagster._core.remote_representation import (
     CodeLocation,
-    ExternalJob,
-    ExternalRepository,
+    RemoteJob,
+    RemoteRepository,
     RepositoryHandle,
 )
 from dagster._core.remote_representation.external_data import (
     PartitionNamesSnap,
     PartitionSetExecutionParamSnap,
 )
-from dagster._core.snap import JobSnapshot, NodeInvocationSnap
+from dagster._core.snap import JobSnap, NodeInvocationSnap
 from dagster._core.storage.dagster_run import DagsterRun
 from dagster._core.telemetry import log_external_repo_stats, telemetry_wrapper
 from dagster._core.utils import make_new_backfill_id
@@ -165,10 +165,10 @@ def execute_print_command(instance, verbose, cli_args, print_fn):
 
 
 def print_ops(
-    job_snapshot: JobSnapshot,
+    job_snapshot: JobSnap,
     print_fn: Callable[..., Any],
 ):
-    check.inst_param(job_snapshot, "job_snapshot", JobSnapshot)
+    check.inst_param(job_snapshot, "job_snapshot", JobSnap)
     check.callable_param(print_fn, "print_fn")
 
     printer = IndentingPrinter(indent_level=2, printer=print_fn)
@@ -181,10 +181,10 @@ def print_ops(
 
 
 def print_job(
-    job_snapshot: JobSnapshot,
+    job_snapshot: JobSnap,
     print_fn: Callable[..., Any],
 ):
-    check.inst_param(job_snapshot, "job_snapshot", JobSnapshot)
+    check.inst_param(job_snapshot, "job_snapshot", JobSnap)
     check.callable_param(print_fn, "print_fn")
     printer = IndentingPrinter(indent_level=2, printer=print_fn)
     printer.line(f"Job: {job_snapshot.name}")
@@ -216,10 +216,10 @@ def format_description(desc: str, indent: str):
 
 def print_op(
     printer: IndentingPrinter,
-    job_snapshot: JobSnapshot,
+    job_snapshot: JobSnap,
     node_invocation_snap: NodeInvocationSnap,
 ) -> None:
-    check.inst_param(job_snapshot, "job_snapshot", JobSnapshot)
+    check.inst_param(job_snapshot, "job_snapshot", JobSnap)
     check.inst_param(node_invocation_snap, "node_invocation_snap", NodeInvocationSnap)
     printer.line(f"Op: {node_invocation_snap.node_name}")
     with printer.with_indent():
@@ -435,8 +435,8 @@ def execute_launch_command(
 def _create_external_run(
     instance: DagsterInstance,
     code_location: CodeLocation,
-    external_repo: ExternalRepository,
-    external_job: ExternalJob,
+    external_repo: RemoteRepository,
+    external_job: RemoteJob,
     run_config: Mapping[str, object],
     tags: Optional[Mapping[str, str]],
     op_selection: Optional[Sequence[str]],
@@ -444,8 +444,8 @@ def _create_external_run(
 ) -> DagsterRun:
     check.inst_param(instance, "instance", DagsterInstance)
     check.inst_param(code_location, "code_location", CodeLocation)
-    check.inst_param(external_repo, "external_repo", ExternalRepository)
-    check.inst_param(external_job, "external_job", ExternalJob)
+    check.inst_param(external_repo, "external_repo", RemoteRepository)
+    check.inst_param(external_job, "external_job", RemoteJob)
     check.opt_mapping_param(run_config, "run_config", key_type=str)
 
     check.opt_mapping_param(tags, "tags", key_type=str)
@@ -501,12 +501,12 @@ def _create_external_run(
 
 
 def _check_execute_external_job_args(
-    external_job: ExternalJob,
+    external_job: RemoteJob,
     run_config: Mapping[str, object],
     tags: Optional[Mapping[str, str]],
     op_selection: Optional[Sequence[str]],
 ) -> Tuple[Mapping[str, object], Mapping[str, str], Optional[Sequence[str]]]:
-    check.inst_param(external_job, "external_job", ExternalJob)
+    check.inst_param(external_job, "external_job", RemoteJob)
     run_config = check.opt_mapping_param(run_config, "run_config")
 
     tags = check.opt_mapping_param(tags, "tags", key_type=str)
