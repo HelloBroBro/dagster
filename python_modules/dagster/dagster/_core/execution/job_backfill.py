@@ -150,11 +150,11 @@ def _get_partition_set(
 
     partition_set_name = origin.partition_set_name
     external_repo = code_location.get_repository(repo_name)
-    if not external_repo.has_external_partition_set(partition_set_name):
+    if not external_repo.has_partition_set(partition_set_name):
         raise DagsterBackfillFailedError(
             f"Could not find partition set {partition_set_name} in repository {repo_name}. "
         )
-    return external_repo.get_external_partition_set(partition_set_name)
+    return external_repo.get_partition_set(partition_set_name)
 
 
 def _subdivide_partition_key_range(
@@ -305,7 +305,7 @@ def submit_backfill_runs(
     )
     external_repo = code_location.get_repository(repo_name)
     partition_set_name = origin.partition_set_name
-    external_partition_set = external_repo.get_external_partition_set(partition_set_name)
+    external_partition_set = external_repo.get_partition_set(partition_set_name)
 
     if backfill_job.asset_selection:
         # need to make another call to the user code location to properly subset
@@ -317,9 +317,9 @@ def submit_backfill_runs(
             op_selection=None,
             asset_selection=backfill_job.asset_selection,
         )
-        external_job = code_location.get_external_job(pipeline_selector)
+        remote_job = code_location.get_external_job(pipeline_selector)
     else:
-        external_job = external_repo.get_full_external_job(external_partition_set.job_name)
+        remote_job = external_repo.get_full_job(external_partition_set.job_name)
 
     partition_data_target = check.is_list(
         [partition_names_or_ranges[0].start]
@@ -372,7 +372,7 @@ def submit_backfill_runs(
         dagster_run = create_backfill_run(
             instance,
             code_location,
-            external_job,
+            remote_job,
             external_partition_set,
             backfill_job,
             key_or_range,
@@ -435,7 +435,7 @@ def create_backfill_run(
         return instance.create_reexecuted_run(
             parent_run=last_run,
             code_location=code_location,
-            external_job=external_pipeline,
+            remote_job=external_pipeline,
             strategy=ReexecutionStrategy.FROM_FAILURE,
             extra_tags=tags,
             run_config=run_config,
@@ -484,7 +484,7 @@ def create_backfill_run(
         root_run_id=root_run_id,
         parent_run_id=parent_run_id,
         status=DagsterRunStatus.NOT_STARTED,
-        external_job_origin=external_pipeline.get_remote_origin(),
+        remote_job_origin=external_pipeline.get_remote_origin(),
         job_code_origin=external_pipeline.get_python_origin(),
         op_selection=op_selection,
         asset_selection=(

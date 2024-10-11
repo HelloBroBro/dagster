@@ -137,14 +137,14 @@ class ReOriginatedReconstructableJobForTest(ReconstructableJob):
 
 class ReOriginatedExternalJobForTest(RemoteJob):
     def __init__(
-        self, external_job: RemoteJob, container_image=None, container_context=None, filename=None
+        self, remote_job: RemoteJob, container_image=None, container_context=None, filename=None
     ):
         self._container_image = container_image
         self._container_context = container_context
         self._filename = filename or "repo.py"
         super(ReOriginatedExternalJobForTest, self).__init__(
-            external_job.external_job_data,
-            external_job.repository_handle,
+            remote_job.job_data_snap,
+            remote_job.repository_handle,
         )
 
     def get_python_origin(self):
@@ -198,7 +198,7 @@ class ReOriginatedExternalScheduleForTest(RemoteSchedule):
     ):
         self._container_image = container_image
         super(ReOriginatedExternalScheduleForTest, self).__init__(
-            external_schedule._external_schedule_data,  # noqa: SLF001
+            external_schedule._schedule_snap,  # noqa: SLF001
             external_schedule.handle.repository_handle,
         )
 
@@ -247,13 +247,11 @@ def get_test_project_workspace(instance, container_image=None, filename=None):
 
 
 @contextmanager
-def get_test_project_external_job_hierarchy(
-    instance, job_name, container_image=None, filename=None
-):
+def get_test_project_remote_job_hierarchy(instance, job_name, container_image=None, filename=None):
     with get_test_project_workspace(instance, container_image, filename) as workspace:
         location = workspace.get_code_location(workspace.code_location_names[0])
         repo = location.get_repository("demo_execution_repo")
-        job = repo.get_full_external_job(job_name)
+        job = repo.get_full_job(job_name)
         yield workspace, location, repo, job
 
 
@@ -265,10 +263,10 @@ def get_test_project_external_repo(instance, container_image=None, filename=None
 
 
 @contextmanager
-def get_test_project_workspace_and_external_job(
+def get_test_project_workspace_and_remote_job(
     instance, job_name, container_image=None, filename=None
 ):
-    with get_test_project_external_job_hierarchy(instance, job_name, container_image, filename) as (
+    with get_test_project_remote_job_hierarchy(instance, job_name, container_image, filename) as (
         workspace,
         _location,
         _repo,
@@ -284,7 +282,7 @@ def get_test_project_external_schedule(
     with get_test_project_external_repo(
         instance, container_image=container_image, filename=filename
     ) as (_, repo):
-        yield repo.get_external_schedule(schedule_name)
+        yield repo.get_schedule(schedule_name)
 
 
 def get_test_project_docker_image():
