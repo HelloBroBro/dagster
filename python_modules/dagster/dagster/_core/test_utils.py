@@ -430,7 +430,7 @@ class MockedRunCoordinator(RunCoordinator, ConfigurableClass):
 
     def submit_run(self, context: SubmitRunContext):
         dagster_run = context.dagster_run
-        check.not_none(dagster_run.external_job_origin)
+        check.not_none(dagster_run.remote_job_origin)
         self._queue.append(dagster_run)
         return dagster_run
 
@@ -532,7 +532,7 @@ def create_test_daemon_workspace_context(
             yield workspace_process_context
 
 
-def load_external_repo(
+def load_remote_repo(
     workspace_context: WorkspaceProcessContext, repo_name: str
 ) -> RemoteRepository:
     code_location_entry = next(

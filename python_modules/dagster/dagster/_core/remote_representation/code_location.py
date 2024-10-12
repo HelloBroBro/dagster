@@ -46,7 +46,7 @@ from dagster._core.execution.plan.state import KnownExecutionState
 from dagster._core.instance import DagsterInstance
 from dagster._core.libraries import DagsterLibraryRegistry
 from dagster._core.origin import RepositoryPythonOrigin
-from dagster._core.remote_representation import ExternalJobSubsetResult
+from dagster._core.remote_representation import RemoteJobSubsetResult
 from dagster._core.remote_representation.external import (
     RemoteExecutionPlan,
     RemoteJob,
@@ -131,7 +131,7 @@ class CodeLocation(AbstractContextManager):
         return self.origin.location_name
 
     @abstractmethod
-    def get_external_execution_plan(
+    def get_execution_plan(
         self,
         remote_job: RemoteJob,
         run_config: Mapping[str, object],
@@ -141,8 +141,8 @@ class CodeLocation(AbstractContextManager):
     ) -> RemoteExecutionPlan:
         pass
 
-    def get_external_job(self, selector: JobSubsetSelector) -> RemoteJob:
-        """Return the ExternalPipeline for a specific pipeline. Subclasses only
+    def get_job(self, selector: JobSubsetSelector) -> RemoteJob:
+        """Return the RemoteJob for a specific pipeline. Subclasses only
         need to implement get_subset_remote_job_result to handle the case where
         an op selection is specified, which requires access to the underlying JobDefinition
         to generate the subsetted pipeline snapshot.
@@ -157,8 +157,8 @@ class CodeLocation(AbstractContextManager):
         repo_handle = self.get_repository(selector.repository_name).handle
 
         subset_result = self.get_subset_remote_job_result(selector)
-        external_data = subset_result.external_job_data
-        if external_data is None:
+        job_data_snap = subset_result.job_data_snap
+        if job_data_snap is None:
             error = check.not_none(subset_result.error)
             if error.cls_name == "DagsterInvalidSubsetError":
                 raise DagsterInvalidSubsetError(check.not_none(error.message))
@@ -168,17 +168,17 @@ class CodeLocation(AbstractContextManager):
                     f" {error}"
                 )
 
-        return RemoteJob(external_data, repo_handle)
+        return RemoteJob(job_data_snap, repo_handle)
 
     @abstractmethod
-    def get_subset_remote_job_result(self, selector: JobSubsetSelector) -> ExternalJobSubsetResult:
-        """Returns a snapshot about an ExternalPipeline with an op selection, which requires
+    def get_subset_remote_job_result(self, selector: JobSubsetSelector) -> RemoteJobSubsetResult:
+        """Returns a snapshot about an RemoteJob with an op selection, which requires
         access to the underlying JobDefinition. Callsites should likely use
-        `get_external_pipeline` instead.
+        `get_remote_job` instead.
         """
 
     @abstractmethod
-    def get_external_partition_config(
+    def get_partition_config(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -187,7 +187,7 @@ class CodeLocation(AbstractContextManager):
     ) -> Union["PartitionConfigSnap", "PartitionExecutionErrorSnap"]:
         pass
 
-    def get_external_partition_tags(
+    def get_partition_tags(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -204,10 +204,10 @@ class CodeLocation(AbstractContextManager):
             # In addition to the performance benefits, this is convenient in the case where the
             # implicit asset job has assets with different PartitionsDefinitions, as the gRPC
             # API for getting partition tags from the code server doesn't support an asset selection.
-            external_repo = self.get_repository(repository_handle.repository_name)
+            remote_repo = self.get_repository(repository_handle.repository_name)
             return PartitionTagsSnap(
                 name=partition_name,
-                tags=external_repo.get_partition_tags_for_implicit_asset_job(
+                tags=remote_repo.get_partition_tags_for_implicit_asset_job(
                     partition_name=partition_name,
                     job_name=job_name,
                     selected_asset_keys=selected_asset_keys,
@@ -215,7 +215,7 @@ class CodeLocation(AbstractContextManager):
                 ),
             )
         else:
-            return self.get_external_partition_tags_from_repo(
+            return self.get_partition_tags_from_repo(
                 repository_handle=repository_handle,
                 job_name=job_name,
                 partition_name=partition_name,
@@ -223,7 +223,7 @@ class CodeLocation(AbstractContextManager):
             )
 
     @abstractmethod
-    def get_external_partition_tags_from_repo(
+    def get_partition_tags_from_repo(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -232,38 +232,38 @@ class CodeLocation(AbstractContextManager):
     ) -> Union["PartitionTagsSnap", "PartitionExecutionErrorSnap"]:
         pass
 
-    def get_external_partition_names(
+    def get_partition_names(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
         instance: DagsterInstance,
         selected_asset_keys: Optional[AbstractSet[AssetKey]],
     ) -> Union[PartitionNamesSnap, "PartitionExecutionErrorSnap"]:
-        external_repo = self.get_repository(repository_handle.repository_name)
+        remote_repo = self.get_repository(repository_handle.repository_name)
         partition_set_name = partition_set_snap_name_for_job_name(job_name)
 
-        if external_repo.has_partition_set(partition_set_name):
-            external_partition_set = external_repo.get_partition_set(partition_set_name)
+        if remote_repo.has_partition_set(partition_set_name):
+            partition_set = remote_repo.get_partition_set(partition_set_name)
 
             # Prefer to return the names without calling out to user code if there's a corresponding
             # partition set that allows it
-            if external_partition_set.has_partition_name_data():
+            if partition_set.has_partition_name_data():
                 return PartitionNamesSnap(
-                    partition_names=external_partition_set.get_partition_names(instance=instance)
+                    partition_names=partition_set.get_partition_names(instance=instance)
                 )
             else:
-                return self.get_external_partition_names_from_repo(repository_handle, job_name)
+                return self.get_partition_names_from_repo(repository_handle, job_name)
         else:
             # Asset jobs might have no corresponding partition set but still have partitioned
             # assets, so we get the partition names using the assets.
             return PartitionNamesSnap(
-                partition_names=external_repo.get_partition_names_for_asset_job(
+                partition_names=remote_repo.get_partition_names_for_asset_job(
                     job_name=job_name, selected_asset_keys=selected_asset_keys, instance=instance
                 )
             )
 
     @abstractmethod
-    def get_external_partition_names_from_repo(
+    def get_partition_names_from_repo(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -271,7 +271,7 @@ class CodeLocation(AbstractContextManager):
         pass
 
     @abstractmethod
-    def get_external_partition_set_execution_param_data(
+    def get_partition_set_execution_params(
         self,
         repository_handle: RepositoryHandle,
         partition_set_name: str,
@@ -281,7 +281,7 @@ class CodeLocation(AbstractContextManager):
         pass
 
     @abstractmethod
-    def get_external_schedule_execution_data(
+    def get_schedule_execution_data(
         self,
         instance: DagsterInstance,
         repository_handle: RepositoryHandle,
@@ -292,7 +292,7 @@ class CodeLocation(AbstractContextManager):
         pass
 
     @abstractmethod
-    def get_external_sensor_execution_data(
+    def get_sensor_execution_data(
         self,
         instance: DagsterInstance,
         repository_handle: RepositoryHandle,
@@ -306,7 +306,7 @@ class CodeLocation(AbstractContextManager):
         pass
 
     @abstractmethod
-    def get_external_notebook_data(self, notebook_path: str) -> bytes:
+    def get_notebook_data(self, notebook_path: str) -> bytes:
         pass
 
     @property
@@ -444,7 +444,7 @@ class InProcessCodeLocation(CodeLocation):
     def get_repositories(self) -> Mapping[str, RemoteRepository]:
         return self._repositories
 
-    def get_subset_remote_job_result(self, selector: JobSubsetSelector) -> ExternalJobSubsetResult:
+    def get_subset_remote_job_result(self, selector: JobSubsetSelector) -> RemoteJobSubsetResult:
         check.inst_param(selector, "selector", JobSubsetSelector)
         check.invariant(
             selector.location_name == self.name,
@@ -463,7 +463,7 @@ class InProcessCodeLocation(CodeLocation):
             include_parent_snapshot=True,
         )
 
-    def get_external_execution_plan(
+    def get_execution_plan(
         self,
         remote_job: RemoteJob,
         run_config: Mapping[str, object],
@@ -499,7 +499,7 @@ class InProcessCodeLocation(CodeLocation):
             )
         )
 
-    def get_external_partition_config(
+    def get_partition_config(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -517,7 +517,7 @@ class InProcessCodeLocation(CodeLocation):
             instance_ref=instance.get_ref(),
         )
 
-    def get_external_partition_tags_from_repo(
+    def get_partition_tags_from_repo(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -536,7 +536,7 @@ class InProcessCodeLocation(CodeLocation):
             instance_ref=instance.get_ref(),
         )
 
-    def get_external_partition_names_from_repo(
+    def get_partition_names_from_repo(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -546,7 +546,7 @@ class InProcessCodeLocation(CodeLocation):
             job_name=job_name,
         )
 
-    def get_external_schedule_execution_data(
+    def get_schedule_execution_data(
         self,
         instance: DagsterInstance,
         repository_handle: RepositoryHandle,
@@ -579,7 +579,7 @@ class InProcessCodeLocation(CodeLocation):
 
         return result
 
-    def get_external_sensor_execution_data(
+    def get_sensor_execution_data(
         self,
         instance: DagsterInstance,
         repository_handle: RepositoryHandle,
@@ -606,7 +606,7 @@ class InProcessCodeLocation(CodeLocation):
 
         return result
 
-    def get_external_partition_set_execution_param_data(
+    def get_partition_set_execution_params(
         self,
         repository_handle: RepositoryHandle,
         partition_set_name: str,
@@ -624,7 +624,7 @@ class InProcessCodeLocation(CodeLocation):
             instance_ref=instance.get_ref(),
         )
 
-    def get_external_notebook_data(self, notebook_path: str) -> bytes:
+    def get_notebook_data(self, notebook_path: str) -> bytes:
         check.str_param(notebook_path, "notebook_path")
         return get_notebook_data(notebook_path)
 
@@ -673,7 +673,7 @@ class GrpcServerCodeLocation(CodeLocation):
         self._watch_server = check.bool_param(watch_server, "watch_server")
 
         self._server_id = None
-        self._external_repositories_data = None
+        self._repository_snaps = None
 
         self._executable_path = None
         self._container_image = None
@@ -723,12 +723,12 @@ class GrpcServerCodeLocation(CodeLocation):
 
             self._container_context = list_repositories_response.container_context
 
-            self._external_repositories_data = sync_get_streaming_external_repositories_data_grpc(
+            self._repository_snaps = sync_get_streaming_external_repositories_data_grpc(
                 self.client,
                 self,
             )
 
-            self.external_repositories = {
+            self.remote_repositories = {
                 repo_name: RemoteRepository(
                     repo_data,
                     RepositoryHandle.from_location(
@@ -737,7 +737,7 @@ class GrpcServerCodeLocation(CodeLocation):
                     ),
                     instance,
                 )
-                for repo_name, repo_data in self._external_repositories_data.items()
+                for repo_name, repo_data in self._repository_snaps.items()
             }
         except:
             self.cleanup()
@@ -817,9 +817,9 @@ class GrpcServerCodeLocation(CodeLocation):
         return name in self.get_repositories()
 
     def get_repositories(self) -> Mapping[str, RemoteRepository]:
-        return self.external_repositories
+        return self.remote_repositories
 
-    def get_external_execution_plan(
+    def get_execution_plan(
         self,
         remote_job: RemoteJob,
         run_config: Mapping[str, Any],
@@ -861,9 +861,7 @@ class GrpcServerCodeLocation(CodeLocation):
 
         return RemoteExecutionPlan(execution_plan_snapshot=execution_plan_snapshot_or_error)
 
-    def get_subset_remote_job_result(
-        self, selector: JobSubsetSelector
-    ) -> "ExternalJobSubsetResult":
+    def get_subset_remote_job_result(self, selector: JobSubsetSelector) -> "RemoteJobSubsetResult":
         check.inst_param(selector, "selector", JobSubsetSelector)
         check.invariant(
             selector.location_name == self.name,
@@ -871,8 +869,8 @@ class GrpcServerCodeLocation(CodeLocation):
             f" {self.name}",
         )
 
-        external_repository = self.get_repository(selector.repository_name)
-        job_handle = JobHandle(selector.job_name, external_repository.handle)
+        remote_repository = self.get_repository(selector.repository_name)
+        job_handle = JobHandle(selector.job_name, remote_repository.handle)
         subset = sync_get_external_job_subset_grpc(
             self.client,
             job_handle.get_remote_origin(),
@@ -881,16 +879,16 @@ class GrpcServerCodeLocation(CodeLocation):
             asset_selection=selector.asset_selection,
             asset_check_selection=selector.asset_check_selection,
         )
-        if subset.external_job_data:
+        if subset.job_data_snap:
             full_job = self.get_repository(selector.repository_name).get_full_job(selector.job_name)
             subset = copy(
                 subset,
-                external_job_data=copy(subset.external_job_data, parent_job=full_job.job_snapshot),
+                job_data_snap=copy(subset.job_data_snap, parent_job=full_job.job_snapshot),
             )
 
         return subset
 
-    def get_external_partition_config(
+    def get_partition_config(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -905,7 +903,7 @@ class GrpcServerCodeLocation(CodeLocation):
             self.client, repository_handle, job_name, partition_name, instance
         )
 
-    def get_external_partition_tags_from_repo(
+    def get_partition_tags_from_repo(
         self,
         repository_handle: RepositoryHandle,
         job_name: str,
@@ -920,12 +918,12 @@ class GrpcServerCodeLocation(CodeLocation):
             self.client, repository_handle, job_name, partition_name, instance
         )
 
-    def get_external_partition_names_from_repo(
+    def get_partition_names_from_repo(
         self, repository_handle: RepositoryHandle, job_name: str
     ) -> Union[PartitionNamesSnap, "PartitionExecutionErrorSnap"]:
         return sync_get_external_partition_names_grpc(self.client, repository_handle, job_name)
 
-    def get_external_schedule_execution_data(
+    def get_schedule_execution_data(
         self,
         instance: DagsterInstance,
         repository_handle: RepositoryHandle,
@@ -950,7 +948,7 @@ class GrpcServerCodeLocation(CodeLocation):
             log_key,
         )
 
-    def get_external_sensor_execution_data(
+    def get_sensor_execution_data(
         self,
         instance: DagsterInstance,
         repository_handle: RepositoryHandle,
@@ -975,7 +973,7 @@ class GrpcServerCodeLocation(CodeLocation):
             last_sensor_start_time,
         )
 
-    def get_external_partition_set_execution_param_data(
+    def get_partition_set_execution_params(
         self,
         repository_handle: RepositoryHandle,
         partition_set_name: str,
@@ -990,7 +988,7 @@ class GrpcServerCodeLocation(CodeLocation):
             self.client, repository_handle, partition_set_name, partition_names, instance
         )
 
-    def get_external_notebook_data(self, notebook_path: str) -> bytes:
+    def get_notebook_data(self, notebook_path: str) -> bytes:
         check.str_param(notebook_path, "notebook_path")
         return sync_get_streaming_external_notebook_data_grpc(self.client, notebook_path)
 
