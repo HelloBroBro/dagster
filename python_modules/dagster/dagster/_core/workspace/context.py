@@ -36,13 +36,18 @@ from dagster._core.remote_representation import (
     RemoteJob,
     RepositoryHandle,
 )
-from dagster._core.remote_representation.external import RemoteRepository
+from dagster._core.remote_representation.external import (
+    RemoteRepository,
+    RemoteSchedule,
+    RemoteSensor,
+)
 from dagster._core.remote_representation.grpc_server_registry import GrpcServerRegistry
 from dagster._core.remote_representation.grpc_server_state_subscriber import (
     LocationStateChangeEvent,
     LocationStateChangeEventType,
     LocationStateSubscriber,
 )
+from dagster._core.remote_representation.handle import InstigatorHandle
 from dagster._core.remote_representation.origin import (
     GrpcServerCodeLocationOrigin,
     ManagedGrpcPythonEnvCodeLocationOrigin,
@@ -65,7 +70,10 @@ from dagster._utils.aiodataloader import DataLoader
 from dagster._utils.error import SerializableErrorInfo, serializable_error_info_from_exc_info
 
 if TYPE_CHECKING:
-    from dagster._core.definitions.remote_asset_graph import RemoteAssetGraph, RemoteAssetNode
+    from dagster._core.definitions.remote_asset_graph import (
+        RemoteWorkspaceAssetGraph,
+        RemoteWorkspaceAssetNode,
+    )
     from dagster._core.remote_representation import (
         PartitionConfigSnap,
         PartitionExecutionErrorSnap,
@@ -107,7 +115,7 @@ class BaseWorkspaceRequestContext(LoadingContext):
         return self.get_workspace_snapshot().code_location_entries
 
     @property
-    def asset_graph(self) -> "RemoteAssetGraph":
+    def asset_graph(self) -> "RemoteWorkspaceAssetGraph":
         return self.get_workspace_snapshot().asset_graph
 
     @property
@@ -332,15 +340,31 @@ class BaseWorkspaceRequestContext(LoadingContext):
     def get_base_deployment_context(self) -> Optional["BaseWorkspaceRequestContext"]:
         return None
 
-    def get_asset_node(self, asset_key: AssetKey) -> Optional["RemoteAssetNode"]:
+    def get_asset_node(self, asset_key: AssetKey) -> Optional["RemoteWorkspaceAssetNode"]:
         if not self.get_workspace_snapshot().asset_graph.has(asset_key):
             return None
 
         return self.get_workspace_snapshot().asset_graph.get(asset_key)
 
-    def get_repository(self, selector: RepositorySelector) -> RemoteRepository:
+    def get_repository(
+        self, selector: Union[RepositorySelector, RepositoryHandle]
+    ) -> RemoteRepository:
         return self.get_code_location(selector.location_name).get_repository(
             selector.repository_name
+        )
+
+    def get_sensor(self, selector: InstigatorHandle) -> RemoteSensor:
+        return (
+            self.get_code_location(selector.location_name)
+            .get_repository(selector.repository_name)
+            .get_sensor(selector.instigator_name)
+        )
+
+    def get_schedule(self, selector: InstigatorHandle) -> RemoteSchedule:
+        return (
+            self.get_code_location(selector.location_name)
+            .get_repository(selector.repository_name)
+            .get_schedule(selector.instigator_name)
         )
 
 
