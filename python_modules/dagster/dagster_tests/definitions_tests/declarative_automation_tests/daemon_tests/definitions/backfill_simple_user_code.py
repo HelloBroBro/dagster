@@ -47,7 +47,7 @@ defs = dg.Definitions(
     assets=[A, B, C, D, E],
     sensors=[
         dg.AutomationConditionSensorDefinition(
-            "the_sensor", asset_selection="*", user_code=True, emit_backfills=True
+            "the_sensor", asset_selection="*", use_user_code_server=True
         )
     ],
 )

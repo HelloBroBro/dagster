@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from typing import Callable, List, Optional
 from unittest.mock import MagicMock
@@ -8,9 +9,11 @@ from dagster import (
     AssetKey,
     AssetOut,
     AssetsDefinition,
+    AssetSpec,
     AutomationCondition,
     DagsterInstance,
     DailyPartitionsDefinition,
+    Definitions,
     GraphOut,
     HourlyPartitionsDefinition,
     LastPartitionMapping,
@@ -754,7 +757,11 @@ def test_toposort(
     asset_graph = asset_graph_from_assets([A, B, Ac, Bc])
 
     assert asset_graph.toposorted_asset_keys == [A.key, B.key]
-    assert asset_graph.toposorted_entity_keys == [A.key, Ac.check_key, B.key, Bc.check_key]
+    assert asset_graph.toposorted_entity_keys_by_level == [
+        [A.key],
+        [Ac.check_key, B.key],
+        [Bc.check_key],
+    ]
 
 
 def test_required_assets_and_checks_by_key_asset_decorator(
@@ -872,6 +879,32 @@ def test_multi_asset_check(
 
     for key in [biz_check.key, buz_check.key]:
         assert asset_graph.get_execution_set_asset_and_check_keys(key) == {key}
+
+
+def test_multi_asset_with_many_specs():
+    @multi_asset(
+        name="metabase_questions",
+        compute_kind="metabase",
+        specs=[
+            AssetSpec(
+                key=["metabase", str(i)],
+                metadata={"id": str(i)},
+            )
+            for i in range(6000)
+        ],
+        can_subset=True,
+    )
+    def my_multi_asset_with_many_specs():
+        pass
+
+    defs = Definitions(assets=[my_multi_asset_with_many_specs])
+
+    start_time = time.time()
+    defs.get_all_job_defs()
+
+    end_time = time.time()
+
+    assert end_time - start_time < 15, "multi asset took too long to load"
 
 
 def test_check_deps(asset_graph_from_assets: Callable[..., BaseAssetGraph]) -> None:
