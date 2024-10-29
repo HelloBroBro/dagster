@@ -22,6 +22,7 @@ from typing import (
 from typing_extensions import Self
 
 import dagster._check as check
+from dagster._config.snap import ConfigTypeSnap
 from dagster._core.definitions.asset_key import AssetKey
 from dagster._core.definitions.selector import (
     JobSelector,
@@ -58,6 +59,8 @@ from dagster._core.remote_representation.origin import (
     GrpcServerCodeLocationOrigin,
     ManagedGrpcPythonEnvCodeLocationOrigin,
 )
+from dagster._core.snap.dagster_types import DagsterTypeSnap
+from dagster._core.snap.node import GraphDefSnap, OpDefSnap
 from dagster._core.workspace.load_target import WorkspaceLoadTarget
 from dagster._core.workspace.permissions import (
     PermissionResult,
@@ -76,10 +79,7 @@ from dagster._utils.aiodataloader import DataLoader
 from dagster._utils.error import SerializableErrorInfo, serializable_error_info_from_exc_info
 
 if TYPE_CHECKING:
-    from dagster._core.definitions.remote_asset_graph import (
-        RemoteWorkspaceAssetGraph,
-        RemoteWorkspaceAssetNode,
-    )
+    from dagster._core.definitions.remote_asset_graph import RemoteWorkspaceAssetGraph
     from dagster._core.remote_representation import (
         PartitionConfigSnap,
         PartitionExecutionErrorSnap,
@@ -346,12 +346,6 @@ class BaseWorkspaceRequestContext(LoadingContext):
     def get_base_deployment_context(self) -> Optional["BaseWorkspaceRequestContext"]:
         return None
 
-    def get_asset_node(self, asset_key: AssetKey) -> Optional["RemoteWorkspaceAssetNode"]:
-        if not self.get_workspace_snapshot().asset_graph.has(asset_key):
-            return None
-
-        return self.get_workspace_snapshot().asset_graph.get(asset_key)
-
     def get_repository(
         self, selector: Union[RepositorySelector, RepositoryHandle]
     ) -> RemoteRepository:
@@ -392,6 +386,30 @@ class BaseWorkspaceRequestContext(LoadingContext):
             return None
 
         return repository.get_schedule(selector.instigator_name)
+
+    def get_node_def(
+        self,
+        job_selector: Union[JobSubsetSelector, JobSelector],
+        node_def_name: str,
+    ) -> Union[OpDefSnap, GraphDefSnap]:
+        job = self.get_full_job(job_selector)
+        return job.get_node_def_snap(node_def_name)
+
+    def get_config_type(
+        self,
+        job_selector: Union[JobSubsetSelector, JobSelector],
+        type_key: str,
+    ) -> ConfigTypeSnap:
+        job = self.get_full_job(job_selector)
+        return job.config_schema_snapshot.get_config_snap(type_key)
+
+    def get_dagster_type(
+        self,
+        job_selector: Union[JobSubsetSelector, JobSelector],
+        type_key: str,
+    ) -> DagsterTypeSnap:
+        job = self.get_full_job(job_selector)
+        return job.job_snapshot.dagster_type_namespace_snapshot.get_dagster_type_snap(type_key)
 
 
 class WorkspaceRequestContext(BaseWorkspaceRequestContext):
