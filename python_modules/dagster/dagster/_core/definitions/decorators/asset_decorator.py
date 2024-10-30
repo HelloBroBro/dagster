@@ -64,7 +64,7 @@ from dagster._core.errors import DagsterInvalidDefinitionError, DagsterInvariant
 from dagster._core.storage.tags import KIND_PREFIX
 from dagster._core.types.dagster_type import DagsterType
 from dagster._utils.tags import normalize_tags
-from dagster._utils.warnings import disable_dagster_warnings
+from dagster._utils.warnings import deprecation_warning, disable_dagster_warnings
 
 
 @overload
@@ -132,7 +132,6 @@ def _validate_hidden_non_argument_dep_param(
 @experimental_param(param="io_manager_def")
 @experimental_param(param="backfill_policy")
 @experimental_param(param="owners")
-@experimental_param(param="tags")
 @experimental_param(param="kinds")
 @hidden_param(
     param="non_argument_deps",
@@ -732,7 +731,6 @@ def graph_asset(
 ) -> Callable[[Callable[..., Any]], AssetsDefinition]: ...
 
 
-@experimental_param(param="tags")
 @experimental_param(param="owners")
 @experimental_param(param="kinds")
 @hidden_param(
@@ -1141,6 +1139,15 @@ def _deps_and_non_argument_deps_to_asset_deps(
 def make_asset_deps(deps: Optional[Iterable[CoercibleToAssetDep]]) -> Optional[Iterable[AssetDep]]:
     if deps is None:
         return None
+
+    # when AssetKey was a plain NamedTuple, it also happened to be Iterable[CoercibleToAssetKey]
+    # so continue to support it here
+    if isinstance(deps, AssetKey):
+        deprecation_warning(
+            subject="Passing a single AssetKey to deps",
+            breaking_version="1.10.0",
+        )
+        deps = [deps]
 
     # expand any multi_assets into a list of keys
     all_deps = []
