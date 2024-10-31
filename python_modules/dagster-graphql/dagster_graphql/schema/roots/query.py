@@ -22,7 +22,6 @@ from dagster._core.scheduler.instigation import InstigatorStatus, InstigatorType
 from dagster._core.storage.event_log.base import AssetRecord
 from dagster._core.workspace.permissions import Permissions
 
-from dagster_graphql.implementation.asset_checks_loader import AssetChecksLoader
 from dagster_graphql.implementation.execution.backfill import get_asset_backfill_preview
 from dagster_graphql.implementation.external import (
     fetch_location_entry,
@@ -567,14 +566,14 @@ class GrapheneQuery(graphene.ObjectType):
     truePartitionsForAutomationConditionEvaluationNode = graphene.Field(
         non_null_list(graphene.String),
         assetKey=graphene.Argument(graphene.NonNull(GrapheneAssetKeyInput)),
-        evaluationId=graphene.Argument(graphene.NonNull(graphene.Int)),
+        evaluationId=graphene.Argument(graphene.NonNull(graphene.BigInt)),
         nodeUniqueId=graphene.Argument(graphene.String),
         description="Retrieve the partition keys which were true for a specific automation condition evaluation node.",
     )
 
     autoMaterializeEvaluationsForEvaluationId = graphene.Field(
         GrapheneAutoMaterializeAssetEvaluationRecordsOrError,
-        evaluationId=graphene.Argument(graphene.NonNull(graphene.Int)),
+        evaluationId=graphene.Argument(graphene.NonNull(graphene.BigInt)),
         description=(
             "Retrieve the auto materialization evaluation records for a given evaluation ID."
         ),
@@ -583,7 +582,7 @@ class GrapheneQuery(graphene.ObjectType):
     assetConditionEvaluationForPartition = graphene.Field(
         GrapheneAssetConditionEvaluation,
         assetKey=graphene.Argument(graphene.NonNull(GrapheneAssetKeyInput)),
-        evaluationId=graphene.Argument(graphene.NonNull(graphene.Int)),
+        evaluationId=graphene.Argument(graphene.NonNull(graphene.BigInt)),
         partition=graphene.Argument(graphene.NonNull(graphene.String)),
         description="Retrieve the condition evaluation for an asset and partition.",
     )
@@ -598,7 +597,7 @@ class GrapheneQuery(graphene.ObjectType):
 
     assetConditionEvaluationsForEvaluationId = graphene.Field(
         GrapheneAssetConditionEvaluationRecordsOrError,
-        evaluationId=graphene.Argument(graphene.NonNull(graphene.Int)),
+        evaluationId=graphene.Argument(graphene.NonNull(graphene.BigInt)),
         description=("Retrieve the condition evaluation records for a given evaluation ID."),
     )
 
@@ -1019,6 +1018,7 @@ class GrapheneQuery(graphene.ObjectType):
                 remote_nodes = [
                     graphene_info.context.asset_graph.get(asset_key)
                     for asset_key in resolved_asset_keys
+                    if graphene_info.context.asset_graph.has(asset_key)
                 ]
             else:
                 remote_nodes = [
@@ -1038,11 +1038,6 @@ class GrapheneQuery(graphene.ObjectType):
         final_keys = [node.key for node in results]
         AssetRecord.prepare(graphene_info.context, final_keys)
 
-        asset_checks_loader = AssetChecksLoader(
-            context=graphene_info.context,
-            asset_keys=final_keys,
-        )
-
         def load_asset_graph() -> RemoteAssetGraph:
             if repo is not None:
                 return repo.asset_graph
@@ -1060,7 +1055,6 @@ class GrapheneQuery(graphene.ObjectType):
         nodes = [
             GrapheneAssetNode(
                 remote_node=remote_node,
-                asset_checks_loader=asset_checks_loader,
                 stale_status_loader=stale_status_loader,
                 dynamic_partitions_loader=dynamic_partitions_loader,
                 # base_deployment_context will be None if we are not in a branch deployment

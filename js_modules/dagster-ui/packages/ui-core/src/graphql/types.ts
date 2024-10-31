@@ -303,7 +303,7 @@ export type AssetConditionEvaluationRecord = {
   assetKey: AssetKey;
   endTimestamp: Maybe<Scalars['Float']['output']>;
   evaluation: AssetConditionEvaluation;
-  evaluationId: Scalars['Int']['output'];
+  evaluationId: Scalars['BigInt']['output'];
   evaluationNodes: Array<AutomationConditionEvaluationNode>;
   id: Scalars['ID']['output'];
   isLegacy: Scalars['Boolean']['output'];
@@ -427,7 +427,7 @@ export type AssetNode = {
   changedReasons: Array<ChangeReason>;
   computeKind: Maybe<Scalars['String']['output']>;
   configField: Maybe<ConfigTypeField>;
-  currentAutoMaterializeEvaluationId: Maybe<Scalars['Int']['output']>;
+  currentAutoMaterializeEvaluationId: Maybe<Scalars['BigInt']['output']>;
   dataVersion: Maybe<Scalars['String']['output']>;
   dataVersionByPartition: Array<Maybe<Scalars['String']['output']>>;
   dependedBy: Array<AssetDependency>;
@@ -624,7 +624,7 @@ export type AutoMaterializeAssetEvaluationNeedsMigrationError = Error & {
 export type AutoMaterializeAssetEvaluationRecord = {
   __typename: 'AutoMaterializeAssetEvaluationRecord';
   assetKey: AssetKey;
-  evaluationId: Scalars['Int']['output'];
+  evaluationId: Scalars['BigInt']['output'];
   id: Scalars['ID']['output'];
   numDiscarded: Scalars['Int']['output'];
   numRequested: Scalars['Int']['output'];
@@ -1987,7 +1987,7 @@ export enum InstigationStatus {
 
 export type InstigationTick = {
   __typename: 'InstigationTick';
-  autoMaterializeAssetEvaluationId: Maybe<Scalars['Int']['output']>;
+  autoMaterializeAssetEvaluationId: Maybe<Scalars['BigInt']['output']>;
   cursor: Maybe<Scalars['String']['output']>;
   dynamicPartitionsRequestResults: Array<DynamicPartitionsRequestResult>;
   endTimestamp: Maybe<Scalars['Float']['output']>;
@@ -3797,7 +3797,7 @@ export type QueryAssetCheckExecutionsArgs = {
 
 export type QueryAssetConditionEvaluationForPartitionArgs = {
   assetKey: AssetKeyInput;
-  evaluationId: Scalars['Int']['input'];
+  evaluationId: Scalars['BigInt']['input'];
   partition: Scalars['String']['input'];
 };
 
@@ -3808,7 +3808,7 @@ export type QueryAssetConditionEvaluationRecordsOrErrorArgs = {
 };
 
 export type QueryAssetConditionEvaluationsForEvaluationIdArgs = {
-  evaluationId: Scalars['Int']['input'];
+  evaluationId: Scalars['BigInt']['input'];
 };
 
 export type QueryAssetNodeAdditionalRequiredKeysArgs = {
@@ -3851,7 +3851,7 @@ export type QueryAutoMaterializeAssetEvaluationsOrErrorArgs = {
 };
 
 export type QueryAutoMaterializeEvaluationsForEvaluationIdArgs = {
-  evaluationId: Scalars['Int']['input'];
+  evaluationId: Scalars['BigInt']['input'];
 };
 
 export type QueryAutoMaterializeTicksArgs = {
@@ -4020,7 +4020,7 @@ export type QueryTopLevelResourceDetailsOrErrorArgs = {
 
 export type QueryTruePartitionsForAutomationConditionEvaluationNodeArgs = {
   assetKey: AssetKeyInput;
-  evaluationId: Scalars['Int']['input'];
+  evaluationId: Scalars['BigInt']['input'];
   nodeUniqueId?: InputMaybe<Scalars['String']['input']>;
 };
 
@@ -6238,7 +6238,7 @@ export const buildAssetConditionEvaluationRecord = (
           ? ({} as AssetConditionEvaluation)
           : buildAssetConditionEvaluation({}, relationshipsToOmit),
     evaluationId:
-      overrides && overrides.hasOwnProperty('evaluationId') ? overrides.evaluationId! : 5501,
+      overrides && overrides.hasOwnProperty('evaluationId') ? overrides.evaluationId! : 'unde',
     evaluationNodes:
       overrides && overrides.hasOwnProperty('evaluationNodes') ? overrides.evaluationNodes! : [],
     id:
@@ -6565,7 +6565,7 @@ export const buildAssetNode = (
     currentAutoMaterializeEvaluationId:
       overrides && overrides.hasOwnProperty('currentAutoMaterializeEvaluationId')
         ? overrides.currentAutoMaterializeEvaluationId!
-        : 6693,
+        : 'libero',
     dataVersion:
       overrides && overrides.hasOwnProperty('dataVersion') ? overrides.dataVersion! : 'a',
     dataVersionByPartition:
@@ -6884,7 +6884,7 @@ export const buildAutoMaterializeAssetEvaluationRecord = (
           ? ({} as AssetKey)
           : buildAssetKey({}, relationshipsToOmit),
     evaluationId:
-      overrides && overrides.hasOwnProperty('evaluationId') ? overrides.evaluationId! : 9286,
+      overrides && overrides.hasOwnProperty('evaluationId') ? overrides.evaluationId! : 'molestiae',
     id:
       overrides && overrides.hasOwnProperty('id')
         ? overrides.id!
@@ -9063,7 +9063,7 @@ export const buildInstigationTick = (
     autoMaterializeAssetEvaluationId:
       overrides && overrides.hasOwnProperty('autoMaterializeAssetEvaluationId')
         ? overrides.autoMaterializeAssetEvaluationId!
-        : 5375,
+        : 'sed',
     cursor: overrides && overrides.hasOwnProperty('cursor') ? overrides.cursor! : 'voluptatem',
     dynamicPartitionsRequestResults:
       overrides && overrides.hasOwnProperty('dynamicPartitionsRequestResults')
