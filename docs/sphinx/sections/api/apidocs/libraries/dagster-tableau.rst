@@ -25,6 +25,6 @@ Assets (Tableau API)
 
 .. autofunction:: load_tableau_asset_specs
 
-.. autofunction:: build_tableau_executable_assets_definition
+.. autofunction:: build_tableau_materializable_assets_definition
 
-
+.. autofunction:: parse_tableau_external_and_materializable_asset_specs
