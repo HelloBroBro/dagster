@@ -4,11 +4,12 @@ import logging
 import os
 import time
 from enum import Enum
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple, Type
 from urllib.parse import urljoin
 
 import requests
 from dagster import (
+    Definitions,
     Failure,
     InitResourceContext,
     MetadataValue,
@@ -19,7 +20,10 @@ from dagster import (
 )
 from dagster._annotations import experimental
 from dagster._config.pythonic_config import ConfigurableResource
+from dagster._core.definitions.asset_spec import AssetSpec
+from dagster._core.definitions.definitions_load_context import StateBackedDefinitionsLoader
 from dagster._core.definitions.resource_definition import dagster_maintained_resource
+from dagster._record import record
 from dagster._utils.cached_method import cached_method
 from dagster._vendored.dateutil import parser
 from pydantic import Field, PrivateAttr
@@ -27,6 +31,7 @@ from requests.auth import HTTPBasicAuth
 from requests.exceptions import RequestException
 
 from dagster_fivetran.translator import (
+    DagsterFivetranTranslator,
     FivetranContentData,
     FivetranContentType,
     FivetranWorkspaceData,
@@ -42,6 +47,8 @@ FIVETRAN_CONNECTOR_PATH = f"{FIVETRAN_CONNECTOR_ENDPOINT}/"
 
 # default polling interval (in seconds)
 DEFAULT_POLL_INTERVAL = 10
+
+FIVETRAN_RECONSTRUCTION_METADATA_KEY_PREFIX = "dagster-fivetran/reconstruction_metadata"
 
 
 class FivetranConnectorSetupStateType(Enum):
@@ -599,6 +606,7 @@ class FivetranWorkspace(ConfigurableResource):
     to interact with Fivetran APIs.
     """
 
+    account_id: str = Field(description="The Fivetran account ID.")
     api_key: str = Field(description="The Fivetran API key to use for this resource.")
     api_secret: str = Field(description="The Fivetran API secret to use for this resource.")
     request_max_retries: int = Field(
@@ -674,3 +682,70 @@ class FivetranWorkspace(ConfigurableResource):
                 )
 
         return FivetranWorkspaceData.from_content_data(connectors + destinations)
+
+
+@experimental
+def load_fivetran_asset_specs(
+    workspace: FivetranWorkspace,
+    dagster_fivetran_translator: Type[DagsterFivetranTranslator] = DagsterFivetranTranslator,
+) -> Sequence[AssetSpec]:
+    """Returns a list of AssetSpecs representing the Fivetran content in the workspace.
+
+    Args:
+        workspace (FivetranWorkspace): The Fivetran workspace to fetch assets from.
+        dagster_fivetran_translator (Type[DagsterFivetranTranslator]): The translator to use
+            to convert Fivetran content into AssetSpecs. Defaults to DagsterFivetranTranslator.
+
+    Returns:
+        List[AssetSpec]: The set of assets representing the Fivetran content in the workspace.
+
+    Examples:
+        Loading the asset specs for a given Fivetran workspace:
+
+        .. code-block:: python
+            from dagster_fivetran import FivetranWorkspace, load_fivetran_asset_specs
+
+            import dagster as dg
+
+            fivetran_workspace = FivetranWorkspace(
+                account_id=dg.EnvVar("FIVETRAN_ACCOUNT_ID"),
+                api_key=dg.EnvVar("FIVETRAN_API_KEY"),
+                api_secret=dg.EnvVar("FIVETRAN_API_SECRET"),
+            )
+
+            fivetran_specs = load_fivetran_asset_specs(fivetran_workspace)
+            defs = dg.Definitions(assets=[*fivetran_specs], resources={"fivetran": fivetran_workspace}
+    """
+    with workspace.process_config_and_initialize_cm() as initialized_workspace:
+        return check.is_list(
+            FivetranWorkspaceDefsLoader(
+                workspace=initialized_workspace,
+                translator_cls=dagster_fivetran_translator,
+            )
+            .build_defs()
+            .assets,
+            AssetSpec,
+        )
+
+
+@record
+class FivetranWorkspaceDefsLoader(StateBackedDefinitionsLoader[Mapping[str, Any]]):
+    workspace: FivetranWorkspace
+    translator_cls: Type[DagsterFivetranTranslator]
+
+    @property
+    def defs_key(self) -> str:
+        return f"{FIVETRAN_RECONSTRUCTION_METADATA_KEY_PREFIX}/{self.workspace.account_id}"
+
+    def fetch_state(self) -> FivetranWorkspaceData:
+        return self.workspace.fetch_fivetran_workspace_data()
+
+    def defs_from_state(self, state: FivetranWorkspaceData) -> Definitions:
+        translator = self.translator_cls()
+
+        all_asset_specs = [
+            translator.get_asset_spec(props)
+            for props in state.to_fivetran_connector_table_props_data()
+        ]
+
+        return Definitions(assets=all_asset_specs)
