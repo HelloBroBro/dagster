@@ -2,6 +2,7 @@ import re
 from typing import AbstractSet, Any, Dict, List, Optional, Union
 
 from dagster import AssetKey, AssetSpec, MetadataValue, TableSchema
+from dagster._annotations import deprecated
 from dagster._core.definitions.metadata.metadata_set import TableMetadataSet
 from dagster._core.definitions.metadata.table import TableColumn
 from dagster._record import record
@@ -97,9 +98,13 @@ class DagsterSigmaTranslator:
     def organization_data(self) -> SigmaOrganizationData:
         return self._context
 
+    @deprecated(
+        breaking_version="1.10",
+        additional_warn_text="Use `DagsterSigmaTranslator.get_asset_spec(...).key` instead",
+    )
     def get_asset_key(self, data: Union[SigmaDataset, SigmaWorkbook]) -> AssetKey:
         """Get the AssetKey for a Sigma object, such as a workbook or dataset."""
-        return AssetKey(_coerce_input_to_valid_name(data.properties["name"]))
+        return self.get_asset_spec(data).key
 
     def get_asset_spec(self, data: Union[SigmaDataset, SigmaWorkbook]) -> AssetSpec:
         """Get the AssetSpec for a Sigma object, such as a workbook or dataset."""
@@ -119,7 +124,7 @@ class DagsterSigmaTranslator:
             ]
 
             return AssetSpec(
-                key=self.get_asset_key(data),
+                key=AssetKey(_coerce_input_to_valid_name(data.properties["name"])),
                 metadata=metadata,
                 kinds={"sigma", "workbook"},
                 deps={
@@ -148,7 +153,7 @@ class DagsterSigmaTranslator:
             }
 
             return AssetSpec(
-                key=self.get_asset_key(data),
+                key=AssetKey(_coerce_input_to_valid_name(data.properties["name"])),
                 metadata=metadata,
                 kinds={"sigma", "dataset"},
                 deps={
