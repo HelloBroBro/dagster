@@ -1,14 +1,31 @@
 import importlib.util
+import itertools
 import os
 import sys
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, ClassVar, Dict, Final, Iterable, Optional, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    Final,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Type,
+    cast,
+)
 
+from pydantic import BaseModel
 from typing_extensions import Self
 
 from dagster._core.errors import DagsterError
 from dagster._utils import snakecase
+from dagster._utils.pydantic_yaml import parse_yaml_file_to_pydantic
 
 if TYPE_CHECKING:
     from dagster._core.definitions.definitions_class import Definitions
@@ -26,7 +43,40 @@ class Component(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def build_defs(self) -> "Definitions": ...
+    def build_defs(self, context: "ComponentLoadContext") -> "Definitions": ...
+
+    @classmethod
+    @abstractmethod
+    def from_component_params(
+        cls, init_context: "ComponentInitContext", component_params: object
+    ) -> Self: ...
+
+    @classmethod
+    def loadable_paths(cls, path: Path) -> Sequence[Path]:
+        return [path]
+
+
+class FileCollectionComponent(Component):
+    """Convenience class for defining components which operate independently on files within
+    a subdirectory.
+    """
+
+    @abstractmethod
+    def loadable_paths(self) -> Sequence[Path]:
+        """Returns the paths within the subdirectory that should be loaded by this component."""
+        ...
+
+    @abstractmethod
+    def build_defs_for_path(
+        self, path: Path, load_context: "ComponentLoadContext"
+    ) -> "Definitions": ...
+
+    def build_defs(self, load_context: "ComponentLoadContext") -> "Definitions":
+        from dagster._core.definitions.definitions_class import Definitions
+
+        return Definitions.merge(
+            *(self.build_defs_for_path(path, load_context) for path in self.loadable_paths())
+        )
 
 
 def is_inside_deployment_project(path: str = ".") -> bool:
@@ -175,6 +225,8 @@ class ComponentRegistry:
         self._components: Dict[str, Type[Component]] = {}
 
     def register(self, name: str, component: Type[Component]) -> None:
+        if name in self._components:
+            raise DagsterError(f"There is an existing component registered under {name}")
         self._components[name] = component
 
     def has(self, name: str) -> bool:
@@ -190,6 +242,57 @@ class ComponentRegistry:
         return f"<ComponentRegistry {list(self._components.keys())}>"
 
 
+class ComponentLoadContext:
+    def __init__(self, resources: Mapping[str, object] = {}):
+        self.resources = resources
+
+
+class DefsFileModel(BaseModel):
+    component_type: str
+    component_params: Optional[Mapping[str, Any]] = None
+
+
+@dataclass
+class ComponentInitContext:
+    path: Path
+    registry: ComponentRegistry = field(default_factory=lambda: ComponentRegistry())
+
+    def for_path(self, path: Path) -> "ComponentInitContext":
+        return replace(self, path=path)
+
+    def get_parsed_defs(self) -> Optional[DefsFileModel]:
+        defs_path = self.path / "defs.yml"
+        if defs_path.exists():
+            return parse_yaml_file_to_pydantic(DefsFileModel, defs_path.read_text(), str(self.path))
+        else:
+            return None
+
+    def load(self) -> Sequence[Component]:
+        if not self.path.is_dir():
+            return []
+
+        parsed_defs = self.get_parsed_defs()
+        if parsed_defs:
+            component_type = cast(Type[Component], self.registry.get(parsed_defs.component_type))
+            return [component_type.from_component_params(self, parsed_defs.component_params)]
+        else:
+            return list(
+                itertools.chain(*(self.for_path(subpath).load() for subpath in self.path.iterdir()))
+            )
+
+
+def build_defs_from_path(
+    path: Path,
+    registry: ComponentRegistry,
+    resources: Mapping[str, object],
+) -> "Definitions":
+    from dagster._core.definitions.definitions_class import Definitions
+
+    init_context = ComponentInitContext(path=path, registry=registry)
+    components = init_context.load()
+    return Definitions.merge(*[c.build_defs(ComponentLoadContext(resources)) for c in components])
+
+
 def register_components_in_module(registry: ComponentRegistry, root_module: ModuleType) -> None:
     from dagster._core.definitions.load_assets_from_modules import (
         find_modules_in_package,
@@ -200,5 +303,4 @@ def register_components_in_module(registry: ComponentRegistry, root_module: Modu
         for component in find_subclasses_in_module(module, (Component,)):
             if component is Component:
                 continue
-            name = f"{module.__name__}[{component.registered_name()}]"
-            registry.register(name, component)
+            registry.register(component.registered_name(), component)
