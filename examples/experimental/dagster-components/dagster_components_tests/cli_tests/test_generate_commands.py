@@ -8,15 +8,15 @@ from pathlib import Path
 from typing import Iterator
 
 from click.testing import CliRunner
-from dagster._components.cli.generate import (
+from dagster._utils import pushd
+from dagster_components.cli.generate import (
     generate_code_location_command,
     generate_component_command,
     generate_component_type_command,
     generate_deployment_command,
 )
-from dagster._components.core.component import ComponentRegistry
-from dagster._components.core.deployment import CodeLocationProjectContext
-from dagster._utils import pushd
+from dagster_components.core.component import ComponentRegistry
+from dagster_components.core.deployment import CodeLocationProjectContext
 
 
 def _ensure_cwd_on_sys_path():
@@ -32,7 +32,7 @@ def _assert_module_imports(module_name: str):
 # This is a holder for code that is intended to be written to a file
 def _example_component_type_baz():
     from dagster import AssetExecutionContext, Definitions, PipesSubprocessClient, asset
-    from dagster._components import Component, ComponentLoadContext
+    from dagster_components import Component, ComponentLoadContext
 
     _SAMPLE_PIPES_SCRIPT = """
     from dagster_pipes import open_dagster_pipes
@@ -202,3 +202,19 @@ def test_generate_component_already_exists_fails() -> None:
         result = runner.invoke(generate_component_command, ["baz", "qux"])
         assert result.exit_code != 0
         assert "already exists" in result.output
+
+
+def test_generate_global_component_instance() -> None:
+    runner = CliRunner()
+    with isolated_example_code_location_bar(runner):
+        result = runner.invoke(generate_component_command, ["sling_replication", "file_ingest"])
+        assert result.exit_code == 0
+        assert Path("bar/components/file_ingest").exists()
+
+        defs_path = Path("bar/components/file_ingest/defs.yml")
+        assert defs_path.exists()
+        assert "component_type: sling_replication" in defs_path.read_text()
+
+        replication_path = Path("bar/components/file_ingest/replication.yaml")
+        assert replication_path.exists()
+        assert "source: " in replication_path.read_text()
